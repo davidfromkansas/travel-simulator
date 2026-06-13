@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Italy Walk — travel simulator</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { height: 100%; overflow: hidden; background: #1a1a1f; font-family: system-ui, sans-serif; }
+      #app { width: 100vw; height: 100vh; display: block; }
+      #hud {
+        position: fixed; left: 16px; bottom: 16px; color: #fff;
+        background: rgba(0,0,0,0.45); padding: 10px 14px; border-radius: 10px;
+        font-size: 13px; line-height: 1.5; backdrop-filter: blur(6px); pointer-events: none;
+      }
+      #hud b { color: #ffd24a; }
+      #loading {
+        position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+        color: #fff; font-size: 18px; letter-spacing: 0.04em; transition: opacity 0.4s; z-index: 10;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="app"></canvas>
+    <div id="loading">Loading the town…</div>
+    <div id="hud">
+      <b>↑ / W</b> forward &nbsp; <b>↓ / S</b> back &nbsp; <b>← →</b> turn &nbsp; <b>A / D</b> strafe &nbsp; <b>Shift</b> run
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

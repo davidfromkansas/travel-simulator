@@ -1,0 +1,266 @@
+.app {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ---------- Onboarding ---------- */
+.onboarding {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 30% 20%, #16203a 0%, #070912 60%);
+  padding: 24px;
+}
+
+.card {
+  width: min(560px, 100%);
+  background: rgba(20, 26, 44, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  padding: 32px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+}
+
+.card h1 {
+  margin: 0 0 4px;
+  font-size: 28px;
+}
+
+.subtitle {
+  margin: 0 0 22px;
+  color: #9fb0cc;
+  font-size: 14px;
+}
+
+.card label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #c7d3e8;
+  margin-bottom: 14px;
+}
+
+.card .row {
+  display: flex;
+  gap: 14px;
+}
+.card .row label {
+  flex: 1;
+}
+
+.hint {
+  font-weight: 400;
+  color: #6b7a96;
+  font-size: 11px;
+}
+
+.card input {
+  background: #0d1322;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 11px 13px;
+  color: #fff;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.card input:focus {
+  border-color: #ffcf5c;
+}
+
+.level-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 6px 0 24px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #c7d3e8;
+}
+.toggle {
+  display: flex;
+  background: #0d1322;
+  border-radius: 10px;
+  padding: 4px;
+  gap: 4px;
+}
+.toggle button {
+  border: none;
+  background: transparent;
+  color: #9fb0cc;
+  padding: 8px 18px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.toggle button.active {
+  background: #ffcf5c;
+  color: #1a1300;
+}
+
+.primary {
+  width: 100%;
+  border: none;
+  background: linear-gradient(135deg, #ffcf5c, #ff9e3d);
+  color: #2a1c00;
+  font-weight: 700;
+  font-size: 15px;
+  padding: 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: transform 0.1s, filter 0.15s;
+}
+.primary:hover {
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+}
+.primary.ghost {
+  width: auto;
+  background: rgba(255, 255, 255, 0.08);
+  color: #dfe7f5;
+  margin-top: 18px;
+}
+
+/* ---------- Globe ---------- */
+.globe-wrap {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  background: #05060d;
+}
+.globe-wrap canvas {
+  display: block;
+}
+.globe-hint {
+  position: absolute;
+  bottom: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #9fb0cc;
+  font-size: 13px;
+  letter-spacing: 0.3px;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 8px 16px;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.marker-label {
+  white-space: nowrap;
+  background: rgba(8, 12, 22, 0.9);
+  border: 1px solid rgba(255, 207, 92, 0.4);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 8px;
+  transform: translateY(-4px);
+  transition: transform 0.12s;
+}
+.marker-label.hovered {
+  transform: translateY(-4px) scale(1.08);
+  border-color: #ffcf5c;
+}
+.marker-label .soon {
+  color: #7d8aa3;
+  font-weight: 400;
+}
+
+/* ---------- Town (world build, iframe mount) ---------- */
+.townframe {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #1a1a1f;
+}
+.town-iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+.town-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+  background: radial-gradient(circle at 50% 40%, #16203a 0%, #070912 70%);
+  z-index: 2;
+}
+.town-back {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 3;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(8, 12, 22, 0.6);
+  color: #dfe7f5;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: background 0.15s;
+}
+.town-back:hover {
+  background: rgba(8, 12, 22, 0.85);
+}
+
+/* ---------- Scene (placeholder) ---------- */
+.scene {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 50% 0%, #1d2c1f 0%, #070912 60%);
+  padding: 24px;
+  overflow: auto;
+}
+.scene-card {
+  width: min(560px, 100%);
+  text-align: center;
+}
+.scene-flag {
+  font-size: 72px;
+  line-height: 1;
+}
+.scene-card h1 {
+  margin: 12px 0 4px;
+  font-size: 32px;
+}
+.scene-note {
+  margin: 20px auto;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  padding: 16px;
+  font-size: 13px;
+  color: #b8c4da;
+  text-align: left;
+}
+.profile-dump {
+  text-align: left;
+  background: #0a0e1a;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 16px;
+  font-size: 12px;
+  color: #8fe3a8;
+  overflow-x: auto;
+}
+code {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
