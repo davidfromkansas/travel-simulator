@@ -45,6 +45,28 @@ cd world && npm install && npm run dev -- --port 5174 --strictPort   # http://lo
 ```
 </details>
 
+## Live (Vercel)
+
+| | URL |
+| --- | --- |
+| **App (share this)** | https://onboarding-henna-chi.vercel.app |
+| Town (embedded by the app) | https://world-peach-psi.vercel.app |
+
+Deployed as **two Vercel projects**. The onboarding app embeds the town in an
+iframe; the town URL is baked in at build time via the `VITE_TOWN_URL`
+environment variable (set on the `onboarding` Vercel project →
+`https://world-peach-psi.vercel.app`). The unused `worlds_new/` assets are kept
+out of the town deploy via `world/.vercelignore`.
+
+> Note: these were deployed via the Vercel CLI, **not** linked to this GitHub
+> repo, so `git push` does **not** auto-redeploy. To redeploy: `cd onboarding && vercel --prod`
+> (or `cd world && vercel --prod`). To enable push-to-deploy, import each app as a
+> project in the Vercel dashboard (set the root directory to `onboarding`/`world`
+> and re-add `VITE_TOWN_URL` on the onboarding project).
+>
+> Heads-up: the town downloads a ~68 MB Gaussian splat, so the first load of the
+> town over the public internet takes several seconds.
+
 ## How the two apps connect (two contracts)
 
 1. **Player profile** — `onboarding/` writes a JSON profile to
