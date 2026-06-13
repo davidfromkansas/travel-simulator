@@ -21,7 +21,20 @@ This is a **monorepo** of two apps that connect at one well-defined seam:
 
 ## Run the full experience
 
-The two apps run as separate dev servers (different origins, for now). Run both:
+The two apps run as separate dev servers (different origins, for now), but the
+root scripts boot both at once so you can't forget one:
+
+```bash
+npm run install:all   # installs root + onboarding + world (one time)
+npm run dev           # boots BOTH servers: onboarding :5173 + world :5174
+```
+
+Then open **http://localhost:5173**, fill the onboarding form, and click **Italy**
+on the globe — the town mounts in-page. `npm run dev` uses `--strictPort`, so it
+fails loudly if 5173/5174 are taken rather than silently moving the town's port.
+
+<details>
+<summary>Or run each app on its own</summary>
 
 ```bash
 # terminal 1 — onboarding + globe
@@ -30,9 +43,7 @@ cd onboarding && npm install && npm run dev      # http://localhost:5173
 # terminal 2 — the town (world build)
 cd world && npm install && npm run dev -- --port 5174 --strictPort   # http://localhost:5174
 ```
-
-Then open **http://localhost:5173**, fill the onboarding form, and click **Italy**
-on the globe — the town mounts in-page.
+</details>
 
 ## How the two apps connect (two contracts)
 
