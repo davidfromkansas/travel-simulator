@@ -7,7 +7,8 @@
     "dev": "concurrently -k -n onboarding,world -c cyan,magenta \"npm --prefix onboarding run dev -- --port 5173 --strictPort\" \"npm --prefix world run dev -- --port 5174 --strictPort\"",
     "install:all": "npm install && npm --prefix onboarding install && npm --prefix world install",
     "build": "npm --prefix onboarding run build",
-    "deploy": "(cd world && vercel --prod) && (cd onboarding && vercel --prod)"
+    "deploy": "(cd world && vercel --prod) && (cd onboarding && vercel --prod)",
+    "ship": "git push origin main && npm run deploy"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
