@@ -479,13 +479,34 @@ async function loadNpcs() {
     try {
       const gltf = await loader.loadAsync(def.modelUrl);
       const root = gltf.scene;
-      root.scale.setScalar(CHARACTER_SCALE); // same scale as the player
-      root.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+      // Per-NPC height so the cast aren't identical-sized clones.
+      root.scale.setScalar(CHARACTER_SCALE * (def.look?.scale ?? 1));
+      // Tint this instance so each NPC is a distinct person (and not the player).
+      // Clone the material first — never mutate the shared one the player uses.
+      const tint = def.look?.tint ? new THREE.Color(def.look.tint) : null;
+      root.traverse((o) => {
+        if (!o.isMesh) return;
+        o.castShadow = true;
+        if (tint && o.material) {
+          const recolor = (m) => {
+            const c = m.clone();
+            if (c.color) c.color.copy(tint);
+            if ("metalness" in c) c.metalness = Math.min(c.metalness ?? 0, 0.15);
+            if ("roughness" in c) c.roughness = Math.max(c.roughness ?? 0.5, 0.75);
+            return c;
+          };
+          o.material = Array.isArray(o.material) ? o.material.map(recolor) : recolor(o.material);
+        }
+      });
 
-      // Ground-snap with the existing collider raycast so they don't float.
+      // Ground-snap onto the SAME floor the player stands on. Start the ray
+      // just above an NPC's head (player floor + ~1.5 heads) so it begins below
+      // any overhead collider — awnings, balconies, the trattoria roof — and
+      // hits the walkable floor instead of snapping the NPC up onto a structure.
+      // Fall back to the player's floor height (never world-0) if nothing's hit.
       const [x, , z] = def.pos;
-      const gy = groundHeight(x, z, character.position.y + 5);
-      root.position.set(x, gy !== null ? gy : 0, z);
+      const gy = groundHeight(x, z, character.position.y + CHAR_H * 1.5);
+      root.position.set(x, gy !== null ? gy : character.position.y, z);
 
       // Face roughly toward the player's spawn (model faces +Z; see player code).
       const yaw = Math.atan2(spawn.x - x, spawn.z - z);
@@ -729,6 +750,11 @@ function hideLoading() {
   // spawn — first contact then works without turning around first.
   heading = 0;
   window.__char = character; // debug handle
+  // Ground/NPC raycasts run here BEFORE the first render, so the collider's
+  // world matrix (which carries the 180° X-flip) isn't current yet — force it
+  // now or the snaps hit a stale transform and the cast floats. The player
+  // hides this by re-snapping every frame; NPCs snap once, so they need this.
+  scene.updateMatrixWorld(true);
   // Drop a ground-snap before loading NPCs so they place relative to the
   // character's resolved floor position, and load the cast onto the collider.
   const spawnGy = groundHeight(character.position.x, character.position.z, character.position.y + 5);

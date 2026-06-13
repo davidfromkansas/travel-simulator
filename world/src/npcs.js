@@ -14,11 +14,22 @@
 
 // NPC character models live in public/models/. These are rigged glTF like the
 // player (NOT the player — additional people layered onto the splat). Each gets
-// its own AnimationMixer in main.js. We rotate through the pool so adjacent NPCs
-// aren't the same person; main.js resolves the idle clip case-insensitively, so
-// models with "Idle" vs "idle" clip names both work. Soldier is first so the
-// nearest NPC reads as a different person from the player (who is casual.glb).
-const MODEL_POOL = ["/models/Soldier.glb", "/models/casual.glb"];
+// its own AnimationMixer in main.js, which resolves the idle clip case-insensitively.
+//
+// We use the rigged humanoid (casual.glb — a civilian, already animated) for the
+// whole cast and make each NPC read as a DIFFERENT person via a per-NPC look
+// (clothing tint + height), applied in main.js. The player is left untinted, so
+// the NPCs are also clearly distinct from you. (To swap in real per-role
+// character models later: drop GLBs in public/models/npcs/ and set `model` here.)
+const NPC_MODEL = "/models/casual.glb";
+
+// One look per role (same order as kit.roles): distinct hue + slight height
+// difference so the three read as separate people at a glance.
+const PERSON_LOOKS = [
+  { tint: "#3f7d5a", scale: 0.97 }, // green
+  { tint: "#9c3b34", scale: 1.08 }, // deep red, a touch taller
+  { tint: "#2f5d8a", scale: 0.90 }, // blue, a touch shorter
+];
 
 // Place kits, keyed by language (matching profile.languages.learning). Each kit
 // is a country's cast: an accent colour for the speech bubbles plus the roles
@@ -112,7 +123,8 @@ export function castForLanguage(language, level, spawn) {
     level: lvl,
     greeting: r.greeting,
     greeting_en: r.greeting_en,
-    modelUrl: MODEL_POOL[i % MODEL_POOL.length],
+    modelUrl: NPC_MODEL,
+    look: PERSON_LOOKS[i % PERSON_LOOKS.length],
     pos: positions[i],
     accent: kit.accent,
   }));
