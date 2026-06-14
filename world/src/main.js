@@ -43,6 +43,13 @@ const CAMERA_DIST = CHAR_H * 2.6;    // how far the camera trails behind
 const CAMERA_HEIGHT = CHAR_H * 1.25;
 const HEAD_H = CHAR_H * 0.9;         // eye/look-at height
 
+// Ground-follow. STEP_UP is the most the floor can rise in one frame: the
+// ground ray starts only this far above the feet, so a snap can never mount a
+// wall, awning, or rooftop (that's what flung the player skyward). Drops fall
+// smoothly under GRAVITY instead of teleporting.
+const STEP_UP = CHAR_H * 0.6;        // max climbable step (also caps any up-snap)
+const GRAVITY = 22;                  // m/s² — smooth falls off ledges
+
 // How close you must get to an NPC to talk. Derived from CHAR_H so it scales
 // with the half-scale town instead of hardcoding metres.
 const TALK_RANGE = CHAR_H * 3;
@@ -633,6 +640,7 @@ const clock = new THREE.Clock();
 let heading = 0; // character yaw
 let camDist = CAMERA_DIST; // eased camera distance (for wall collision)
 let camSnapped = false;    // snap the camera into place on the first frame
+let velY = 0;              // vertical velocity, for smooth gravity falls
 
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -675,9 +683,26 @@ function tick() {
   // and puts its back to the camera.
   character.rotation.y = heading + Math.PI;
 
-  // Stick to the ground
-  const gy = groundHeight(character.position.x, character.position.z, character.position.y + 5);
-  if (gy !== null) character.position.y = gy;
+  // Stick to the ground — smooth and step-limited.
+  // Cast DOWN from just above the feet (feet + STEP_UP) so the snap can only
+  // ever raise us by a small step, never onto a wall/awning/roof. Small steps
+  // settle instantly; walking off a ledge falls smoothly under gravity.
+  const ground = groundHeight(character.position.x, character.position.z, character.position.y + STEP_UP);
+  if (ground === null) {
+    // Off-map safety: nothing within reach below — recover onto whatever floor
+    // exists by snapping from high above (rare; keeps us from falling forever).
+    const recover = groundHeight(character.position.x, character.position.z, 50);
+    if (recover !== null) { character.position.y = recover; velY = 0; }
+  } else if (character.position.y <= ground + 0.02) {
+    // On the floor or a small step up: settle exactly onto it (no jitter).
+    character.position.y = ground;
+    velY = 0;
+  } else {
+    // Above the ground (stepped off a ledge): accelerate downward, then land.
+    velY -= GRAVITY * dt;
+    character.position.y += velY * dt;
+    if (character.position.y <= ground) { character.position.y = ground; velY = 0; }
+  }
 
   if (DEBUG_CAM) {
     // piazza center after rotation.x=PI is approx (-0.8, 3, -4.7)
