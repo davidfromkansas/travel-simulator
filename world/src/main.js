@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
 import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from "three-mesh-bvh";
 import { castForLanguage } from "./npcs.js";
@@ -25,7 +26,14 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 const ASSETS = {
   splat: "/worlds/town.spz",
   collider: "/worlds/collider.glb",
-  character: "/models/casual.glb",
+  // Player: a clothed, rigged Mixamo character (FBX), driven by the Mixamo
+  // animation clips in models/anim/ (same skeleton → clips bind by bone name).
+  character: "/models/male.fbx",
+  anims: {
+    idle: "/models/anim/idle.fbx",
+    walk: "/models/anim/walk.fbx",
+    run: "/models/anim/run.fbx",
+  },
 };
 
 // Tunables ------------------------------------------------------------------
@@ -151,6 +159,7 @@ scene.add(character);
 let mixer = null;
 const actions = {};
 let active = null;
+let touristProps = null; // hat/backpack/shirt/shorts that follow the player's bones
 
 function play(name) {
   if (active === actions[name] || !actions[name]) return;
@@ -160,19 +169,192 @@ function play(name) {
   active = next;
 }
 
+const fbxLoader = new FBXLoader();
+
 async function loadCharacter() {
-  const gltf = await loader.loadAsync(ASSETS.character);
-  const model = gltf.scene;
-  model.scale.setScalar(CHARACTER_SCALE);
-  model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  // Clothed, rigged Mixamo character (FBX, authored in cm). Scale it to the
+  // town's character height regardless of source units, and drop its feet onto
+  // y=0 so the ground-follow snaps it cleanly onto the collider.
+  const model = await fbxLoader.loadAsync(ASSETS.character);
+  const rawH = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3()).y || 1;
+  model.scale.setScalar(CHAR_H / rawH);
+  model.traverse((o) => {
+    if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; }
+  });
   character.add(model);
+  // Re-measure after scaling and lift feet to the character origin.
+  model.updateMatrixWorld(true);
+  const minY = new THREE.Box3().setFromObject(model).min.y;
+  model.position.y -= minY;
+
+  // This Mixamo export has SEPARATE skeletons per mesh (body, shirt, shorts,
+  // hair, …) — same bone names duplicated across them. Rebind every mesh onto
+  // the largest (body) skeleton so a single set of bones deforms all of them;
+  // otherwise a clip drives only the first same-named bone it finds and the
+  // visible meshes stay in bind pose (T-pose).
+  const skinned = [];
+  model.traverse((o) => { if (o.isSkinnedMesh) skinned.push(o); });
+  skinned.sort((a, b) => b.skeleton.bones.length - a.skeleton.bones.length);
+  const mainSkel = skinned.length ? skinned[0].skeleton : null;
+  if (mainSkel) {
+    const byName = new Map(mainSkel.bones.map((b) => [b.name, b]));
+    for (const m of skinned) {
+      if (m.skeleton === mainSkel) continue;
+      // Same order as the mesh's own skeleton (so skinIndex stays valid), each
+      // bone swapped for the body skeleton's identically-named bone. Bind poses
+      // are identical across a Mixamo export, so the original boneInverses hold.
+      const remapped = m.skeleton.bones.map((b) => byName.get(b.name) || b);
+      m.bind(new THREE.Skeleton(remapped, m.skeleton.boneInverses), m.bindMatrix);
+    }
+  }
+
+  // Normalize a node name to a bare bone name: the character loads as
+  // "mixamorigHips" (FBXLoader strips the colon) while the clips say "Hips" —
+  // strip a leading "mixamorig"(:) prefix AND any namespace before matching.
+  const baseName = (s) =>
+    s.replace(/^.*?mixamorig:?/i, "").replace(/.*[:|]/, "").toLowerCase();
+
+  // Give the body skeleton's bones UNIQUE names (other skeletons keep theirs),
+  // and map base-name → unique-name. Bones aren't nested under one root in this
+  // FBX, so we root the mixer at the model and let its recursive name search
+  // find these uniquely-named bones — guaranteeing the clip drives the real
+  // body bones, not a same-named phantom. (Skinning is by reference, so renaming
+  // bones is safe; the rebound meshes above hold the same Bone objects.)
+  const charBones = new Map();
+  (mainSkel ? mainSkel.bones : []).forEach((b) => {
+    const key = baseName(b.name);
+    b.name = "PLAYER_" + b.name;
+    charBones.set(key, b.name);
+  });
 
   mixer = new THREE.AnimationMixer(model);
-  for (const clip of gltf.animations) {
-    actions[clip.name] = mixer.clipAction(clip);
-  }
-  // casual.glb (Xbot) ships: idle, walk, run (+ others)
+
+  // Rewrite each clip track's node to the body skeleton's unique bone name; drop
+  // tracks with no match.
+  const retarget = (clip) => {
+    clip.tracks = clip.tracks.filter((t) => {
+      const dot = t.name.lastIndexOf(".");
+      const actual = charBones.get(baseName(t.name.slice(0, dot)));
+      if (!actual) return false;
+      t.name = actual + t.name.slice(dot);
+      return true;
+    });
+  };
+
+  // The character FBX has no clips — load the Mixamo animation-only FBX files
+  // and bind each clip[0] (retargeted) to the character's mixer.
+  const names = Object.keys(ASSETS.anims);
+  const loaded = await Promise.all(
+    names.map((n) => fbxLoader.loadAsync(ASSETS.anims[n]).catch((e) => {
+      console.warn(`anim ${n} failed to load`, e);
+      return null;
+    }))
+  );
+  names.forEach((n, i) => {
+    const clip = loaded[i] && loaded[i].animations && loaded[i].animations[0];
+    if (!clip) return;
+    retarget(clip);
+    actions[n] = mixer.clipAction(clip);
+  });
+
   play("idle");
+}
+
+// --- Tourist outfit ---------------------------------------------------------
+// casual.glb is a bare gray Mixamo mannequin (one body mesh). We can't split
+// it into shirt/skin by material, so instead: tint the body to a skin tone and
+// attach simple procedural props (sun hat, backpack, tropical shirt, shorts).
+// The props are children of `character` and are repositioned from the player's
+// bones every frame (see updateTouristProps), so they track idle/walk/run.
+function dressAsTourist(model) {
+  const skin = new THREE.Color("#c79a72");
+  model.traverse((o) => {
+    if (!o.isMesh || !o.material) return;
+    const recolor = (m) => {
+      const c = m.clone();
+      if (c.color) c.color.copy(skin);
+      if ("metalness" in c) c.metalness = 0.0;
+      if ("roughness" in c) c.roughness = 0.85;
+      return c;
+    };
+    o.material = Array.isArray(o.material) ? o.material.map(recolor) : recolor(o.material);
+  });
+
+  // Find bones tolerantly: search actual Bone objects by regex so it works
+  // whether the loader kept "mixamorig:Head" or sanitized the separator.
+  const findBone = (re) => {
+    let f = null;
+    model.traverse((o) => { if (!f && o.isBone && re.test(o.name)) f = o; });
+    return f;
+  };
+  const bones = {
+    headTop: findBone(/headtop|head[_:]?end/i) || findBone(/head/i),
+    chest: findBone(/spine_?2/i) || findBone(/spine_?1/i) || findBone(/spine|chest/i),
+    hips: findBone(/hips|pelvis/i),
+  };
+  console.log("[tourist] bones:", {
+    headTop: bones.headTop && bones.headTop.name,
+    chest: bones.chest && bones.chest.name,
+    hips: bones.hips && bones.hips.name,
+  });
+
+  const H = CHAR_H;
+  const mat = (hex, rough = 0.85) =>
+    new THREE.MeshStandardMaterial({ color: hex, roughness: rough, metalness: 0.0 });
+
+  // Straw sun hat: brim + crown + band.
+  const hat = new THREE.Group();
+  hat.add(new THREE.Mesh(new THREE.CylinderGeometry(H * 0.25, H * 0.25, H * 0.015, 22), mat("#e7cd86")));
+  const crown = new THREE.Mesh(new THREE.CylinderGeometry(H * 0.12, H * 0.14, H * 0.13, 22), mat("#e7cd86"));
+  crown.position.y = H * 0.07;
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(H * 0.123, H * 0.142, H * 0.03, 22), mat("#b8543f"));
+  band.position.y = H * 0.025;
+  hat.add(crown, band);
+
+  // Tropical shirt (torso) + khaki shorts (hips) — leaves arms/lower legs bare.
+  const shirt = new THREE.Mesh(new THREE.CylinderGeometry(H * 0.18, H * 0.17, H * 0.44, 18), mat("#16b6a6"));
+  const shorts = new THREE.Mesh(new THREE.CylinderGeometry(H * 0.18, H * 0.165, H * 0.26, 18), mat("#d8c089"));
+
+  // Daypack on the back (most visible from the trailing camera).
+  const pack = new THREE.Group();
+  pack.add(new THREE.Mesh(new THREE.BoxGeometry(H * 0.27, H * 0.34, H * 0.15), mat("#c0392b")));
+  const pocket = new THREE.Mesh(new THREE.BoxGeometry(H * 0.2, H * 0.15, H * 0.06), mat("#9c2a1f"));
+  pocket.position.set(0, -H * 0.06, -H * 0.09); // outer face (toward camera)
+  pack.add(pocket);
+
+  for (const p of [hat, shirt, shorts, pack]) {
+    p.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    character.add(p);
+  }
+  touristProps = { bones, hat, shirt, shorts, pack };
+}
+
+const _bonePos = new THREE.Vector3();
+function updateTouristProps() {
+  if (!touristProps) return;
+  const { bones, hat, shirt, shorts, pack } = touristProps;
+  // Bone local transforms were just updated by the mixer; refresh world matrices
+  // so getWorldPosition is correct this frame.
+  character.updateWorldMatrix(true, true);
+  const H = CHAR_H;
+
+  // Place a prop at a bone (in character-local space) with an offset; if the
+  // bone wasn't found, fall back to a fixed body-height so props NEVER sink to
+  // the ground (origin) — fallback heights are measured up from the feet.
+  const place = (prop, bone, dy, dz, fbY, fbZ) => {
+    if (bone) {
+      const p = character.worldToLocal(bone.getWorldPosition(_bonePos)).clone();
+      prop.position.set(p.x, p.y + dy, p.z + dz);
+    } else {
+      prop.position.set(0, fbY, fbZ);
+    }
+  };
+
+  place(hat,    bones.headTop, H * 0.01, 0,        H * 1.00, 0);
+  place(shirt,  bones.chest,  -H * 0.05, 0,        H * 0.62, 0);
+  place(shorts, bones.hips,   -H * 0.06, 0,        H * 0.46, 0);
+  // Backpack on the model's back (model front is +Z, so back is −Z local).
+  place(pack,   bones.chest,  -H * 0.02, -H * 0.14, H * 0.62, -H * 0.14);
 }
 
 // ===========================================================================
@@ -742,6 +924,7 @@ function tick() {
   camera.lookAt(character.position.x, character.position.y + HEAD_H * 0.9, character.position.z);
 
   if (mixer) mixer.update(dt);
+  updateTouristProps(); // keep hat/backpack/shirt/shorts on the player's bones
   updateNpcs(dt); // NPC mixers, proximity, turn-to-face, speech bubbles
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
