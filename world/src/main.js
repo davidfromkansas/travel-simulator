@@ -306,6 +306,44 @@ npcStyle.textContent = `
 `;
 document.head.appendChild(npcStyle);
 
+// --- FPS counter (top-right, stacked under the English toggle) --------------
+// A small monospace badge with a health dot: green ≥50, amber ≥30, red below.
+// FPS is measured from real frame times (not the movement dt, which is clamped),
+// smoothed with an EMA, and written to the DOM ~4×/sec to avoid layout churn.
+const fpsEl = document.createElement("div");
+fpsEl.style.cssText =
+  "position:fixed;right:16px;top:52px;z-index:7;display:flex;align-items:center;gap:7px;" +
+  "background:rgba(0,0,0,0.5);color:#fff;border:1px solid rgba(255,255,255,0.2);" +
+  "border-radius:8px;padding:6px 10px;font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;" +
+  "backdrop-filter:blur(6px);pointer-events:none;";
+const fpsDot = document.createElement("span");
+fpsDot.style.cssText =
+  "width:8px;height:8px;border-radius:50%;background:#7ee787;color:#7ee787;box-shadow:0 0 6px currentColor;";
+const fpsText = document.createElement("span");
+fpsText.textContent = "— fps";
+fpsEl.append(fpsDot, fpsText);
+document.body.appendChild(fpsEl);
+
+let fpsLast = performance.now();
+let fpsAvg = 60;        // EMA of instantaneous fps
+let fpsSince = 0;       // ms since last DOM write
+function updateFps() {
+  const now = performance.now();
+  const frameMs = now - fpsLast;
+  fpsLast = now;
+  if (frameMs > 0) fpsAvg += (1000 / frameMs - fpsAvg) * 0.1;
+  fpsSince += frameMs;
+  if (fpsSince >= 250) {
+    const fps = Math.round(fpsAvg);
+    const color = fps >= 50 ? "#7ee787" : fps >= 30 ? "#f0c674" : "#ff7b72";
+    fpsText.textContent = fps + " fps";
+    fpsText.style.color = color;
+    fpsDot.style.color = color;
+    fpsDot.style.background = color;
+    fpsSince = 0;
+  }
+}
+
 function makeBubble() {
   const el = document.createElement("div");
   el.className = "bubble";
@@ -845,6 +883,7 @@ setupTouchControls();
 
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
+  updateFps(); // measure real frame time every frame (before any early return)
 
   // Turn — gated while typing a reply so the keys go to the input, not the player.
   if (!talking && keys.ArrowLeft) heading += TURN_SPEED * dt;
