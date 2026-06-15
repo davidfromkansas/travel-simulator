@@ -21,7 +21,9 @@
 // (clothing tint + height), applied in main.js. The player is left untinted, so
 // the NPCs are also clearly distinct from you. (To swap in real per-role
 // character models later: drop GLBs in public/models/npcs/ and set `model` here.)
-const NPC_MODEL = "/models/casual.glb";
+// The model is fetched from Vercel Blob at runtime (see assets.js), not git.
+import { asset } from "./assets.js";
+const NPC_MODEL = asset("/models/casual.glb");
 
 // One look per role (same order as kit.roles): distinct hue + slight height
 // difference so the three read as separate people at a glance.

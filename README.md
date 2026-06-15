@@ -55,8 +55,9 @@ cd world && npm install && npm run dev -- --port 5174 --strictPort   # http://lo
 Deployed as **two Vercel projects**. The onboarding app embeds the town in an
 iframe; the town URL is baked in at build time via the `VITE_TOWN_URL`
 environment variable (set on the `onboarding` Vercel project →
-`https://world-peach-psi.vercel.app`). The unused `worlds_new/` assets are kept
-out of the town deploy via `world/.vercelignore`.
+`https://world-peach-psi.vercel.app`). The town's large 3D assets are served
+from a **Vercel Blob** store (not git, not the deploy bundle) — see
+[Assets](#assets) below.
 
 > Note: these were deployed via the Vercel CLI, **not** linked to this GitHub
 > repo, so `git push` does **not** auto-redeploy. To redeploy: `cd onboarding && vercel --prod`
@@ -64,8 +65,8 @@ out of the town deploy via `world/.vercelignore`.
 > project in the Vercel dashboard (set the root directory to `onboarding`/`world`
 > and re-add `VITE_TOWN_URL` on the onboarding project).
 >
-> Heads-up: the town downloads a ~68 MB Gaussian splat, so the first load of the
-> town over the public internet takes several seconds.
+> Heads-up: the town downloads a ~29 MB Gaussian splat from Blob, so the first
+> load of the town over the public internet takes a few seconds.
 
 ## How the two apps connect (two contracts)
 
@@ -83,10 +84,25 @@ When the two are eventually served from one origin, point `VITE_TOWN_URL` at a
 same-origin route (or mount the town directly) and the `localStorage` profile
 works without the URL param — no other changes needed.
 
+## Assets
+
+The town's big binaries — the Gaussian splat (`draft1.spz`, ~29 MB), the
+collider (`draft1.glb`), and the character (`casual.glb`) — are **not committed
+to git**. They live in a public **Vercel Blob** store and are fetched at
+runtime. Git is for code; the assets stay out of history and out of the deploy
+bundle (`world/.vercelignore`).
+
+- Resolution lives in [`world/src/assets.js`](./world/src/assets.js): the Blob
+  base URL is the default, overridable with `VITE_ASSET_BASE`. Set
+  `VITE_ASSET_BASE=` (empty) to serve from `world/public/` for offline dev —
+  those dirs (`public/worlds/`, `public/models/`) are git-ignored, so drop the
+  files in yourself.
+- To update an asset: `cd world && vercel blob put public/worlds/draft1.spz
+  --pathname worlds/draft1.spz --access public --allow-overwrite` (the
+  `BLOB_READ_WRITE_TOKEN` is in `world/.env.local`).
+
 ## Notes
 
-- `world/public/worlds/town.spz` is a ~65 MB Gaussian splat (the active town).
-  `world/public/worlds_new/` is an alternate, currently-unused asset set.
 - The town uses `three-mesh-bvh` to accelerate collision raycasts and caps the
   device pixel ratio for performance — see `world/src/main.js`.
 

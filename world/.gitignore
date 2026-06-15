@@ -3,3 +3,9 @@ dist/
 *.local
 .DS_Store
 .vercel
+.env*
+
+# Large 3D assets live in Vercel Blob, not git (see src/assets.js). Fetched at
+# runtime; you may keep local copies in these dirs for offline dev — ignored.
+public/worlds/
+public/models/

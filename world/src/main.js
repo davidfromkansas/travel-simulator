@@ -4,6 +4,7 @@ import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from "three-mesh-bvh";
 import { castForLanguage } from "./npcs.js";
 import { buildTown } from "./town.js";
+import { asset } from "./assets.js";
 window.THREE = THREE; // debug handle
 
 // Several NPCs may share a character model — cache the fetched glTF so we only
@@ -36,18 +37,16 @@ THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
 // ---------------------------------------------------------------------------
-// Asset paths. Drop your Marble exports into public/worlds/.
-//   - town.spz        the Gaussian splat the town is rendered from
-//   - collider.glb    Marble's collider mesh (used for ground + walls)
+// Asset paths. These big binaries are fetched from Vercel Blob at runtime (not
+// committed to git) — see src/assets.js for the base URL + how to override it.
+//   - draft1.spz      the Gaussian splat the town is rendered from
+//   - draft1.glb      Marble's collider mesh (used for ground + walls)
 // The character is a standard rigged glTF with Idle / Walk / Run clips.
 // ---------------------------------------------------------------------------
-// v2 — town loaded
 const ASSETS = {
-  // New Marble world generated from the exported piazza scaffold (draft1).
-  // Original capture kept at town.spz / collider.glb if we need to revert.
-  splat: "/worlds/draft1.spz",
-  collider: "/worlds/draft1.glb",
-  character: "/models/casual.glb",
+  splat: asset("/worlds/draft1.spz"),
+  collider: asset("/worlds/draft1.glb"),
+  character: asset("/models/casual.glb"),
 };
 
 // Tunables ------------------------------------------------------------------

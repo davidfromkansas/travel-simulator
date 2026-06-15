@@ -1,2 +1,4 @@
-# Unused alternate asset set (~96 MB) — not referenced by the app.
-public/worlds_new
+# Large 3D assets are served from Vercel Blob (see src/assets.js), not bundled
+# into the deploy. Keeps the deployment small and fast to upload.
+public/worlds
+public/models
