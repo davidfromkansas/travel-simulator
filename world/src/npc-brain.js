@@ -46,17 +46,56 @@ export const RESPONSE_SCHEMA = {
   ],
 };
 
+// Describe the traveler (the player) from their onboarding profile so NPCs can
+// talk to them as a person — greet by name, lean into their interests. Returns
+// "" when there's nothing useful (a directly-opened world has no profile), so
+// the prompt stays unchanged in that case. Tolerant of partial profiles.
+export function describeTraveler(player) {
+  if (!player || typeof player !== "object") return "";
+  const facts = [];
+  const name = typeof player.name === "string" ? player.name.trim() : "";
+  const nationality =
+    typeof player.nationality === "string" ? player.nationality.trim() : "";
+  const occupation =
+    typeof player.occupation === "string" ? player.occupation.trim() : "";
+  const travelStyle =
+    typeof player.travelStyle === "string" ? player.travelStyle.trim() : "";
+  const interests = Array.isArray(player.interests)
+    ? player.interests.filter((s) => typeof s === "string" && s.trim())
+    : [];
+  const natives = Array.isArray(player.nativeLanguages)
+    ? player.nativeLanguages.filter((s) => typeof s === "string" && s.trim())
+    : [];
+
+  if (name) facts.push(`their name is ${name}`);
+  if (nationality) facts.push(`they're from ${nationality}`);
+  if (occupation) facts.push(`they work as a ${occupation}`);
+  if (interests.length) facts.push(`they're into ${interests.join(", ")}`);
+  if (travelStyle) facts.push(`their travel style: ${travelStyle}`);
+  if (natives.length) facts.push(`their native language is ${natives.join(", ")}`);
+  if (!facts.length) return "";
+
+  return (
+    `The traveler you're talking to: ${facts.join("; ")}. ` +
+    "Greet them by name when it feels natural, and let their interests and background colour what you say " +
+    "(e.g. recommend things they'd enjoy) — but never break character, and keep speaking the target language."
+  );
+}
+
 // Build the system prompt from language + mapped level + the NPC persona.
 // `opening` (optional) folds the seeded greeting in as context, because that
 // greeting was shown locally and is NOT sent as an assistant message (the API
-// requires the first message to be `user`).
-export function buildSystemPrompt({ language, level, npc, opening }) {
+// requires the first message to be `user`). `player` (optional) is the
+// traveler's profile, woven in so NPCs address them personally.
+export function buildSystemPrompt({ language, level, npc, opening, player }) {
   const levelPhrase = LEVEL_PHRASE[level] ?? LEVEL_PHRASE.beginner;
   const lines = [
     `You are ${npc.name}, an NPC in a language-immersion travel game. Persona: ${npc.persona}`,
     `Stay fully in character at all times — you are ${npc.name}, not an AI assistant.`,
     `Speak ${language}, calibrated to ${levelPhrase}. Keep your spoken line to 1–2 short sentences.`,
   ];
+  const traveler = describeTraveler(player);
+  if (traveler) lines.push(traveler);
   if (opening) {
     lines.push(
       `You already greeted the player with: "${opening}". Continue the conversation naturally from there; do not greet again.`
@@ -108,7 +147,7 @@ export function parseNpcReply(raw) {
 // Generate one NPC reply. `client` is an Anthropic SDK client (injected).
 // `history` is oldest-first [{ role:"assistant"|"user", content }]; the last
 // entry is the newest learner line. Returns the strict response object.
-export async function generateNpcReply(client, { history, language, level, npc, model }) {
+export async function generateNpcReply(client, { history, language, level, npc, player, model }) {
   // The API requires messages to start with a user turn. Our history is seeded
   // with the greeting as the first assistant turn — fold any leading assistant
   // turns into the system prompt as `opening` context instead of sending them.
@@ -123,7 +162,7 @@ export async function generateNpcReply(client, { history, language, level, npc, 
     throw new Error("No learner message to respond to");
   }
 
-  const system = buildSystemPrompt({ language, level, npc, opening });
+  const system = buildSystemPrompt({ language, level, npc, opening, player });
 
   const response = await client.messages.create({
     model: model || DEFAULT_MODEL,

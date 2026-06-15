@@ -196,11 +196,16 @@
   background: radial-gradient(circle at 50% 40%, #16203a 0%, #070912 70%);
   z-index: 2;
 }
-.town-back {
+.town-controls {
   position: absolute;
   top: 16px;
   left: 16px;
   z-index: 3;
+  display: flex;
+  gap: 8px;
+}
+.town-back,
+.town-toggle {
   border: 1px solid rgba(255, 255, 255, 0.18);
   background: rgba(8, 12, 22, 0.6);
   color: #dfe7f5;
@@ -212,7 +217,8 @@
   backdrop-filter: blur(6px);
   transition: background 0.15s;
 }
-.town-back:hover {
+.town-back:hover,
+.town-toggle:hover {
   background: rgba(8, 12, 22, 0.85);
 }
 

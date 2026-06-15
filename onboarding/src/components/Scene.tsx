@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { getCountry } from "../data/countries";
 import { loadProfile } from "../storage";
-import { townUrlFor } from "../world";
+import { townUrlFor, type WorldMode } from "../world";
 import TownFrame from "./TownFrame";
 
 interface Props {
@@ -15,14 +16,22 @@ export default function Scene({ country, onChangeDestination }: Props) {
   const meta = getCountry(country);
   const profile = loadProfile();
 
+  // Default to the photoreal splat (the actual captured scene); the toggle in
+  // TownFrame flips this, which re-points the iframe at the chosen world.
+  const [worldMode, setWorldMode] = useState<WorldMode>("splat");
+
   // World build is ready for this country → drop straight into the town.
-  const townSrc = townUrlFor(country, profile);
+  const townSrc = townUrlFor(country, profile, worldMode);
   if (townSrc) {
     return (
       <TownFrame
         src={townSrc}
         countryName={meta?.name ?? country}
         onChangeDestination={onChangeDestination}
+        worldMode={worldMode}
+        onToggleWorld={() =>
+          setWorldMode((m) => (m === "splat" ? "town" : "splat"))
+        }
       />
     );
   }

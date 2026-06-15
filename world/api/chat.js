@@ -41,7 +41,7 @@ export default async function handler(req, res) {
   }
 
   // --- Validate the contract, fail loud (§3.7) ---------------------------
-  const { history, language, level, npc } = body || {};
+  const { history, language, level, npc, player } = body || {};
   if (!Array.isArray(history) || history.length === 0) {
     return send(res, 400, { error: "`history` must be a non-empty array." });
   }
@@ -62,6 +62,11 @@ export default async function handler(req, res) {
       error: "`npc` must include a string `name` and `persona`.",
     });
   }
+  // `player` is optional (a directly-opened world has no profile); if present it
+  // must be an object. The brain reads only known fields, so extra keys are safe.
+  if (player != null && (typeof player !== "object" || Array.isArray(player))) {
+    return send(res, 400, { error: "`player`, if provided, must be an object." });
+  }
 
   // --- The key must be present, and the error must say where it goes ------
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -80,6 +85,7 @@ export default async function handler(req, res) {
       language,
       level,
       npc,
+      player, // optional traveler context (name, interests, …)
       model: process.env.CHAT_MODEL, // optional override; brain defaults to Haiku
     });
     return send(res, 200, result);

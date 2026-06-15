@@ -10,9 +10,15 @@ window.THREE = THREE; // debug handle
 // download each file once (each NPC still gets its own parsed scene + mixer).
 THREE.Cache.enabled = true;
 
-// Which world to render: the photoreal Gaussian splat ("splat") or the stylized
-// Three.js piazza ("town"). Defaults to the town; ?world=splat switches back.
-const WORLD_MODE = new URLSearchParams(location.search).get("world") === "splat" ? "splat" : "town";
+// Which world to render: the photoreal Gaussian splat ("splat") — the actual
+// captured Italian scene — or the stylized low-poly Three.js piazza ("town").
+// Defaults to the splat; ?world=town switches to the lightweight piazza.
+const WORLD_MODE = new URLSearchParams(location.search).get("world") === "town" ? "town" : "splat";
+
+// When embedded in the onboarding app (iframe), that app owns the world-mode
+// toggle (next to "Change destination"), so we hide the in-iframe one to avoid
+// two competing toggles stacked in the same corner.
+const EMBEDDED = window.self !== window.top;
 
 // Baked NPC positions for the splat world (set after placing them with the
 // "Move NPCs" tool). null → fall back to the generic arc layout. Order matches
@@ -217,25 +223,44 @@ async function loadCharacter() {
 // ===========================================================================
 
 // --- Profile (the world is launched with ?profile=<json> & ?country=) -------
-// Read language + level so the cast and the brain are calibrated to the player.
+// Read language + level so the cast and the brain are calibrated to the player,
+// plus the player's identity/interests so NPCs can talk to them as a person.
 // Falls back to the country default + beginner if the world is opened directly.
 const COUNTRY_DEFAULT_LANGUAGE = { italy: "Italian" };
+const str = (v) => (typeof v === "string" ? v.trim() : "");
+const strArr = (v) => (Array.isArray(v) ? v.filter((s) => typeof s === "string" && s.trim()) : []);
 function readProfile() {
   const params = new URLSearchParams(location.search);
   const country = (params.get("country") || "italy").toLowerCase();
   let language = COUNTRY_DEFAULT_LANGUAGE[country] || "Italian";
   let level = "beginner";
+  let player = null; // the rest of the onboarding answers, for the NPC brain
   const raw = params.get("profile");
   if (raw) {
     try {
       const p = JSON.parse(raw);
       if (p?.languages?.learning) language = p.languages.learning;
       if (p?.languages?.level) level = p.languages.level;
+      // Keep the whole person (name, where they're from, what they're into) so
+      // NPCs can greet by name and lean into interests — not just language/level.
+      const built = {
+        name: str(p?.name),
+        nationality: str(p?.nationality),
+        occupation: str(p?.occupation),
+        interests: strArr(p?.interests),
+        travelStyle: str(p?.travelStyle),
+        nativeLanguages: strArr(p?.languages?.native),
+      };
+      // Only keep it if at least one field is non-empty (a directly-opened
+      // world has no profile → leave player null so the brain skips the block).
+      if (Object.values(built).some((v) => (Array.isArray(v) ? v.length : v))) {
+        player = built;
+      }
     } catch (e) {
       console.warn("Could not parse ?profile= — using defaults.", e);
     }
   }
-  return { country, language, level };
+  return { country, language, level, player };
 }
 const PROFILE = readProfile();
 
@@ -425,6 +450,7 @@ async function sendReply() {
         language: def.language,
         level: def.level,
         npc: { name: def.name, persona: def.persona },
+        player: PROFILE.player || undefined, // who the traveler is (optional)
       }),
     });
     const data = await res.json();
@@ -990,19 +1016,22 @@ function hideLoading() {
   await loadNpcs(); // additive: locals standing in the existing town
   hideLoading();
 
-  // World toggle: reload flipping ?world (splat ⟷ town) so you can compare live.
-  const wbtn = document.createElement("button");
-  wbtn.textContent = WORLD_MODE === "town" ? "🏛 Town — switch to Splat" : "📷 Splat — switch to Town";
-  wbtn.style.cssText =
-    "position:fixed;left:16px;top:16px;z-index:8;background:rgba(0,0,0,0.5);color:#fff;" +
-    "border:1px solid rgba(255,255,255,0.25);border-radius:8px;padding:6px 10px;" +
-    "font:12px system-ui,sans-serif;cursor:pointer;backdrop-filter:blur(6px);";
-  wbtn.addEventListener("click", () => {
-    const u = new URL(location.href);
-    u.searchParams.set("world", WORLD_MODE === "town" ? "splat" : "town");
-    location.href = u.toString();
-  });
-  document.body.appendChild(wbtn);
+  // World toggle (standalone only): reload flipping ?world (splat ⟷ town) so you
+  // can compare live. When embedded, the onboarding app provides this toggle.
+  if (!EMBEDDED) {
+    const wbtn = document.createElement("button");
+    wbtn.textContent = WORLD_MODE === "town" ? "🏛 Town — switch to Splat" : "📷 Splat — switch to Town";
+    wbtn.style.cssText =
+      "position:fixed;left:16px;top:16px;z-index:8;background:rgba(0,0,0,0.5);color:#fff;" +
+      "border:1px solid rgba(255,255,255,0.25);border-radius:8px;padding:6px 10px;" +
+      "font:12px system-ui,sans-serif;cursor:pointer;backdrop-filter:blur(6px);";
+    wbtn.addEventListener("click", () => {
+      const u = new URL(location.href);
+      u.searchParams.set("world", WORLD_MODE === "town" ? "splat" : "town");
+      location.href = u.toString();
+    });
+    document.body.appendChild(wbtn);
+  }
 
   // Export the Three.js town as a .glb — for importing into Marble Studio as a
   // layout scaffold. GLTFExporter is dynamically imported so it's only fetched

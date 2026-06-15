@@ -26,13 +26,23 @@ export function hasTown(country: string): boolean {
   return country.toLowerCase() in TOWN_BY_COUNTRY;
 }
 
+// Which world the town renders: the photoreal Gaussian splat (the actual
+// captured scene) or the stylized low-poly piazza. Splat is the default.
+export type WorldMode = "splat" | "town";
+
 // Build the iframe src for a country's town, handing off the country + profile
-// via query params so the world build can read them cross-origin today.
-export function townUrlFor(country: string, profile: PlayerProfile | null): string | null {
+// via query params so the world build can read them cross-origin today. The
+// world mode is passed through too so the toggle in TownFrame can flip it.
+export function townUrlFor(
+  country: string,
+  profile: PlayerProfile | null,
+  world: WorldMode = "splat"
+): string | null {
   const base = TOWN_BY_COUNTRY[country.toLowerCase()];
   if (!base) return null;
   const url = new URL(base);
   url.searchParams.set("country", country.toLowerCase());
+  url.searchParams.set("world", world);
   if (profile) url.searchParams.set("profile", JSON.stringify(profile));
   return url.toString();
 }

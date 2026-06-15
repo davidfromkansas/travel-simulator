@@ -43,7 +43,7 @@ export default defineConfig(({ mode }) => {
             }
 
             // Same contract validation as api/chat.js (§3.7).
-            const { history, language, level, npc } = body || {};
+            const { history, language, level, npc, player } = body || {};
             if (!Array.isArray(history) || history.length === 0)
               return json(400, { error: "`history` must be a non-empty array." });
             if (typeof language !== "string" || !language.trim())
@@ -60,6 +60,8 @@ export default defineConfig(({ mode }) => {
               return json(400, {
                 error: "`npc` must include a string `name` and `persona`.",
               });
+            if (player != null && (typeof player !== "object" || Array.isArray(player)))
+              return json(400, { error: "`player`, if provided, must be an object." });
 
             const apiKey = env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
             if (!apiKey)
@@ -77,6 +79,7 @@ export default defineConfig(({ mode }) => {
                 language,
                 level,
                 npc,
+                player, // optional traveler context (name, interests, …)
                 model: env.CHAT_MODEL || process.env.CHAT_MODEL,
               });
               json(200, result);
