@@ -1,14 +1,27 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
 import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from "three-mesh-bvh";
 import { castForLanguage } from "./npcs.js";
+import { buildTown } from "./town.js";
 window.THREE = THREE; // debug handle
 
 // Several NPCs may share a character model — cache the fetched glTF so we only
 // download each file once (each NPC still gets its own parsed scene + mixer).
 THREE.Cache.enabled = true;
+
+// Which world to render: the photoreal Gaussian splat ("splat") or the stylized
+// Three.js piazza ("town"). Defaults to the town; ?world=splat switches back.
+const WORLD_MODE = new URLSearchParams(location.search).get("world") === "splat" ? "splat" : "town";
+
+// Baked NPC positions for the splat world (set after placing them with the
+// "Move NPCs" tool). null → fall back to the generic arc layout. Order matches
+// the kit's roles (gelato vendor → trattoria host → barista).
+const SPLAT_STATIONS = [
+  [-4.09, -0.93], // Giulia (gelato) — arc spot
+  [1.22, 2.25],   // Marco (trattoria) — placed out of the fountain
+  [3.56, -2.23],  // Sofia (barista) — arc spot
+];
 
 // Accelerate raycasts with a BVH. The movement loop fires ~8 rays/frame against
 // the collider mesh; without this they brute-force every triangle (stutter).
@@ -24,16 +37,11 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 // ---------------------------------------------------------------------------
 // v2 — town loaded
 const ASSETS = {
-  splat: "/worlds/town.spz",
-  collider: "/worlds/collider.glb",
-  // Player: a clothed, rigged Mixamo character (FBX), driven by the Mixamo
-  // animation clips in models/anim/ (same skeleton → clips bind by bone name).
-  character: "/models/male.fbx",
-  anims: {
-    idle: "/models/anim/idle.fbx",
-    walk: "/models/anim/walk.fbx",
-    run: "/models/anim/run.fbx",
-  },
+  // New Marble world generated from the exported piazza scaffold (draft1).
+  // Original capture kept at town.spz / collider.glb if we need to revert.
+  splat: "/worlds/draft1.spz",
+  collider: "/worlds/draft1.glb",
+  character: "/models/casual.glb",
 };
 
 // Tunables ------------------------------------------------------------------
@@ -46,6 +54,14 @@ const CHAR_H = 1.81 * CHARACTER_SCALE; // resulting character height (~0.9m)
 const WALK_SPEED = 1.6;        // metres / second
 const RUN_SPEED = 3.4;
 const TURN_SPEED = 2.6;        // radians / second (← →)
+
+// Foot-slide control (Task 2): match clip cadence to ground speed via timeScale.
+// casual.glb's walk/run clips are IN-PLACE (zero root translation — measured), so
+// their ground-equivalent speed can't be read from root motion. These are
+// eyeball placeholders. TODO: calibrate from foot-bone travel per cycle if exact
+// foot-lock is wanted — do not treat these as verified.
+const CLIP_WALK_SPEED = 1.4; // TODO: calibrate (in-place clip; placeholder)
+const CLIP_RUN_SPEED = 3.2;  // TODO: calibrate (in-place clip; placeholder)
 const BODY_RADIUS = CHAR_H * 0.28;   // how close the character can get to a wall
 const CAMERA_DIST = CHAR_H * 2.6;    // how far the camera trails behind
 const CAMERA_HEIGHT = CHAR_H * 1.25;
@@ -66,8 +82,8 @@ const BUBBLE_H = CHAR_H * 1.25;      // speech-bubble anchor height above a head
 // Keep the player inside the cleanly-reconstructed core of the splat.
 // Piazza world (marble-1.1-plus): collider extent after the X-flip is
 // X:[-11.6,10.0]  Z:[-13.5,4.2]. Leave ~1.5m margin off the low-detail fringe.
-const BOUNDS = { minX: -10, maxX: 8.5, minZ: -11.5, maxZ: 2.7 };
-const SPLAT_ROTATION_X = Math.PI; // Marble splats usually need a 180° flip
+let BOUNDS = { minX: -10, maxX: 8.5, minZ: -11.5, maxZ: 2.7 }; // overridden in town mode
+const SPLAT_ROTATION_X = 0; // draft1 export is already Y-up (the old town.spz needed Math.PI)
 const DEBUG_CAM = false;
 
 // ---------------------------------------------------------------------------
@@ -115,14 +131,21 @@ raycaster.firstHitOnly = true; // three-mesh-bvh: stop at closest hit (we only u
 const DOWN = new THREE.Vector3(0, -1, 0);
 
 let colliderMeshes = [fallbackGround]; // raycast targets for ground/walls
+let townStations = null; // NPC venue positions when the Three.js town is active
+let townGroup = null;    // the Three.js town root (for GLB export to Marble Studio)
 
 // --- Load splat town -------------------------------------------------------
 let townSplat = null;
+// Vertical nudge to seat the splat's visual ground exactly on the collider you
+// walk on (Marble exports the splat and collider with a small floor offset).
+// Tune live with [ / ] in splat mode, then bake the value here.
+let splatOffsetY = -0.08; // draft1: seats the splat ground onto the collider
 async function loadSplat() {
   try {
     const splat = new SplatMesh({ url: ASSETS.splat });
     await splat.initialized;
     splat.rotation.x = SPLAT_ROTATION_X;
+    splat.position.y = splatOffsetY;
     scene.add(splat);
     townSplat = splat;
     grid.visible = false;
@@ -159,7 +182,6 @@ scene.add(character);
 let mixer = null;
 const actions = {};
 let active = null;
-let touristProps = null; // hat/backpack/shirt/shorts that follow the player's bones
 
 function play(name) {
   if (active === actions[name] || !actions[name]) return;
@@ -169,192 +191,22 @@ function play(name) {
   active = next;
 }
 
-const fbxLoader = new FBXLoader();
-
 async function loadCharacter() {
-  // Clothed, rigged Mixamo character (FBX, authored in cm). Scale it to the
-  // town's character height regardless of source units, and drop its feet onto
-  // y=0 so the ground-follow snaps it cleanly onto the collider.
-  const model = await fbxLoader.loadAsync(ASSETS.character);
-  const rawH = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3()).y || 1;
-  model.scale.setScalar(CHAR_H / rawH);
-  model.traverse((o) => {
-    if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; }
-  });
+  const gltf = await loader.loadAsync(ASSETS.character);
+  const model = gltf.scene;
+  model.scale.setScalar(CHARACTER_SCALE);
+  model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   character.add(model);
-  // Re-measure after scaling and lift feet to the character origin.
-  model.updateMatrixWorld(true);
-  const minY = new THREE.Box3().setFromObject(model).min.y;
-  model.position.y -= minY;
-
-  // This Mixamo export has SEPARATE skeletons per mesh (body, shirt, shorts,
-  // hair, …) — same bone names duplicated across them. Rebind every mesh onto
-  // the largest (body) skeleton so a single set of bones deforms all of them;
-  // otherwise a clip drives only the first same-named bone it finds and the
-  // visible meshes stay in bind pose (T-pose).
-  const skinned = [];
-  model.traverse((o) => { if (o.isSkinnedMesh) skinned.push(o); });
-  skinned.sort((a, b) => b.skeleton.bones.length - a.skeleton.bones.length);
-  const mainSkel = skinned.length ? skinned[0].skeleton : null;
-  if (mainSkel) {
-    const byName = new Map(mainSkel.bones.map((b) => [b.name, b]));
-    for (const m of skinned) {
-      if (m.skeleton === mainSkel) continue;
-      // Same order as the mesh's own skeleton (so skinIndex stays valid), each
-      // bone swapped for the body skeleton's identically-named bone. Bind poses
-      // are identical across a Mixamo export, so the original boneInverses hold.
-      const remapped = m.skeleton.bones.map((b) => byName.get(b.name) || b);
-      m.bind(new THREE.Skeleton(remapped, m.skeleton.boneInverses), m.bindMatrix);
-    }
-  }
-
-  // Normalize a node name to a bare bone name: the character loads as
-  // "mixamorigHips" (FBXLoader strips the colon) while the clips say "Hips" —
-  // strip a leading "mixamorig"(:) prefix AND any namespace before matching.
-  const baseName = (s) =>
-    s.replace(/^.*?mixamorig:?/i, "").replace(/.*[:|]/, "").toLowerCase();
-
-  // Give the body skeleton's bones UNIQUE names (other skeletons keep theirs),
-  // and map base-name → unique-name. Bones aren't nested under one root in this
-  // FBX, so we root the mixer at the model and let its recursive name search
-  // find these uniquely-named bones — guaranteeing the clip drives the real
-  // body bones, not a same-named phantom. (Skinning is by reference, so renaming
-  // bones is safe; the rebound meshes above hold the same Bone objects.)
-  const charBones = new Map();
-  (mainSkel ? mainSkel.bones : []).forEach((b) => {
-    const key = baseName(b.name);
-    b.name = "PLAYER_" + b.name;
-    charBones.set(key, b.name);
-  });
 
   mixer = new THREE.AnimationMixer(model);
-
-  // Rewrite each clip track's node to the body skeleton's unique bone name; drop
-  // tracks with no match.
-  const retarget = (clip) => {
-    clip.tracks = clip.tracks.filter((t) => {
-      const dot = t.name.lastIndexOf(".");
-      const actual = charBones.get(baseName(t.name.slice(0, dot)));
-      if (!actual) return false;
-      t.name = actual + t.name.slice(dot);
-      return true;
-    });
-  };
-
-  // The character FBX has no clips — load the Mixamo animation-only FBX files
-  // and bind each clip[0] (retargeted) to the character's mixer.
-  const names = Object.keys(ASSETS.anims);
-  const loaded = await Promise.all(
-    names.map((n) => fbxLoader.loadAsync(ASSETS.anims[n]).catch((e) => {
-      console.warn(`anim ${n} failed to load`, e);
-      return null;
-    }))
-  );
-  names.forEach((n, i) => {
-    const clip = loaded[i] && loaded[i].animations && loaded[i].animations[0];
-    if (!clip) return;
-    retarget(clip);
-    actions[n] = mixer.clipAction(clip);
-  });
-
-  play("idle");
-}
-
-// --- Tourist outfit ---------------------------------------------------------
-// casual.glb is a bare gray Mixamo mannequin (one body mesh). We can't split
-// it into shirt/skin by material, so instead: tint the body to a skin tone and
-// attach simple procedural props (sun hat, backpack, tropical shirt, shorts).
-// The props are children of `character` and are repositioned from the player's
-// bones every frame (see updateTouristProps), so they track idle/walk/run.
-function dressAsTourist(model) {
-  const skin = new THREE.Color("#c79a72");
-  model.traverse((o) => {
-    if (!o.isMesh || !o.material) return;
-    const recolor = (m) => {
-      const c = m.clone();
-      if (c.color) c.color.copy(skin);
-      if ("metalness" in c) c.metalness = 0.0;
-      if ("roughness" in c) c.roughness = 0.85;
-      return c;
-    };
-    o.material = Array.isArray(o.material) ? o.material.map(recolor) : recolor(o.material);
-  });
-
-  // Find bones tolerantly: search actual Bone objects by regex so it works
-  // whether the loader kept "mixamorig:Head" or sanitized the separator.
-  const findBone = (re) => {
-    let f = null;
-    model.traverse((o) => { if (!f && o.isBone && re.test(o.name)) f = o; });
-    return f;
-  };
-  const bones = {
-    headTop: findBone(/headtop|head[_:]?end/i) || findBone(/head/i),
-    chest: findBone(/spine_?2/i) || findBone(/spine_?1/i) || findBone(/spine|chest/i),
-    hips: findBone(/hips|pelvis/i),
-  };
-  console.log("[tourist] bones:", {
-    headTop: bones.headTop && bones.headTop.name,
-    chest: bones.chest && bones.chest.name,
-    hips: bones.hips && bones.hips.name,
-  });
-
-  const H = CHAR_H;
-  const mat = (hex, rough = 0.85) =>
-    new THREE.MeshStandardMaterial({ color: hex, roughness: rough, metalness: 0.0 });
-
-  // Straw sun hat: brim + crown + band.
-  const hat = new THREE.Group();
-  hat.add(new THREE.Mesh(new THREE.CylinderGeometry(H * 0.25, H * 0.25, H * 0.015, 22), mat("#e7cd86")));
-  const crown = new THREE.Mesh(new THREE.CylinderGeometry(H * 0.12, H * 0.14, H * 0.13, 22), mat("#e7cd86"));
-  crown.position.y = H * 0.07;
-  const band = new THREE.Mesh(new THREE.CylinderGeometry(H * 0.123, H * 0.142, H * 0.03, 22), mat("#b8543f"));
-  band.position.y = H * 0.025;
-  hat.add(crown, band);
-
-  // Tropical shirt (torso) + khaki shorts (hips) — leaves arms/lower legs bare.
-  const shirt = new THREE.Mesh(new THREE.CylinderGeometry(H * 0.18, H * 0.17, H * 0.44, 18), mat("#16b6a6"));
-  const shorts = new THREE.Mesh(new THREE.CylinderGeometry(H * 0.18, H * 0.165, H * 0.26, 18), mat("#d8c089"));
-
-  // Daypack on the back (most visible from the trailing camera).
-  const pack = new THREE.Group();
-  pack.add(new THREE.Mesh(new THREE.BoxGeometry(H * 0.27, H * 0.34, H * 0.15), mat("#c0392b")));
-  const pocket = new THREE.Mesh(new THREE.BoxGeometry(H * 0.2, H * 0.15, H * 0.06), mat("#9c2a1f"));
-  pocket.position.set(0, -H * 0.06, -H * 0.09); // outer face (toward camera)
-  pack.add(pocket);
-
-  for (const p of [hat, shirt, shorts, pack]) {
-    p.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-    character.add(p);
+  for (const clip of gltf.animations) {
+    actions[clip.name] = mixer.clipAction(clip);
   }
-  touristProps = { bones, hat, shirt, shorts, pack };
-}
-
-const _bonePos = new THREE.Vector3();
-function updateTouristProps() {
-  if (!touristProps) return;
-  const { bones, hat, shirt, shorts, pack } = touristProps;
-  // Bone local transforms were just updated by the mixer; refresh world matrices
-  // so getWorldPosition is correct this frame.
-  character.updateWorldMatrix(true, true);
-  const H = CHAR_H;
-
-  // Place a prop at a bone (in character-local space) with an offset; if the
-  // bone wasn't found, fall back to a fixed body-height so props NEVER sink to
-  // the ground (origin) — fallback heights are measured up from the feet.
-  const place = (prop, bone, dy, dz, fbY, fbZ) => {
-    if (bone) {
-      const p = character.worldToLocal(bone.getWorldPosition(_bonePos)).clone();
-      prop.position.set(p.x, p.y + dy, p.z + dz);
-    } else {
-      prop.position.set(0, fbY, fbZ);
-    }
-  };
-
-  place(hat,    bones.headTop, H * 0.01, 0,        H * 1.00, 0);
-  place(shirt,  bones.chest,  -H * 0.05, 0,        H * 0.62, 0);
-  place(shorts, bones.hips,   -H * 0.06, 0,        H * 0.46, 0);
-  // Backpack on the model's back (model front is +Z, so back is −Z local).
-  place(pack,   bones.chest,  -H * 0.02, -H * 0.14, H * 0.62, -H * 0.14);
+  // Match clip cadence to ground speed so the feet don't skate (Task 2).
+  if (actions.walk) actions.walk.timeScale = WALK_SPEED / (CLIP_WALK_SPEED * CHARACTER_SCALE);
+  if (actions.run) actions.run.timeScale = RUN_SPEED / (CLIP_RUN_SPEED * CHARACTER_SCALE);
+  // casual.glb (Xbot) ships: idle, walk, run (+ others)
+  play("idle");
 }
 
 // ===========================================================================
@@ -660,6 +512,9 @@ async function loadNpcs() {
       (BOUNDS.minX + BOUNDS.maxX) / 2 - character.position.x,
       -((BOUNDS.minZ + BOUNDS.maxZ) / 2 - character.position.z)
     ),
+    // In town mode, stand the locals at their built venues (verified positions),
+    // overriding the generic arc — exactly the per-town `stations` data §4.4 wants.
+    stations: townStations || undefined,
   };
 
   const cast = castForLanguage(PROFILE.language, PROFILE.level, spawn);
@@ -775,6 +630,9 @@ function updateNpcs(dt) {
 
 // --- Input -----------------------------------------------------------------
 const keys = {};
+// Movement input also written by the touch joystick (Task 4); summed with the
+// keyboard each frame so a single movement path serves both.
+const touch = { fwd: 0, strafe: 0, run: false };
 addEventListener("keydown", (e) => {
   // Ignore keys typed into the reply box so WASD etc. don't drive the player.
   if (e.target && e.target.tagName === "INPUT") return;
@@ -786,12 +644,83 @@ addEventListener("keyup", (e) => {
   keys[e.code] = false;
 });
 
+// Splat vertical-alignment nudge (splat mode): [ lowers, ] raises the splat so
+// its visual ground sits exactly on the collider. The readout shows the value
+// to bake into `splatOffsetY` above.
+let splatNudgeHud = null;
+addEventListener("keydown", (e) => {
+  if (e.target && e.target.tagName === "INPUT") return;
+  if ((e.code === "BracketLeft" || e.code === "BracketRight") && townSplat) {
+    splatOffsetY += e.code === "BracketRight" ? 0.02 : -0.02;
+    townSplat.position.y = splatOffsetY;
+    if (!splatNudgeHud) {
+      splatNudgeHud = document.createElement("div");
+      splatNudgeHud.style.cssText =
+        "position:fixed;left:16px;top:88px;z-index:9;background:rgba(0,0,0,.6);color:#9fe39f;" +
+        "font:12px ui-monospace,monospace;padding:6px 9px;border-radius:8px;pointer-events:none;";
+      document.body.appendChild(splatNudgeHud);
+    }
+    splatNudgeHud.textContent = `splat Y offset: ${splatOffsetY.toFixed(2)}   ( [ down · ] up )`;
+  }
+});
+
+// --- NPC placement tool: toggle with the "Move NPCs" button, press 1/2/3 to
+// pick a local, click the ground to move them. Read the coords to bake as
+// SPLAT_STATIONS so the positions persist.
+let npcEditMode = false;
+let npcSel = 0;
+let npcEditHud = null;
+function updateNpcEditHud() {
+  if (!npcEditHud) return;
+  const lines = npcObjs.map(
+    (n, i) => `${i === npcSel ? "▶" : " "} ${i + 1}  ${n.def.name}: [${n.pos.x.toFixed(2)}, ${n.pos.z.toFixed(2)}]`
+  );
+  npcEditHud.textContent = "MOVE NPCs — press 1/2/3, then click the ground\n" + lines.join("\n");
+}
+addEventListener("keydown", (e) => {
+  if (!npcEditMode || (e.target && e.target.tagName === "INPUT")) return;
+  if (e.code === "Digit1") npcSel = 0;
+  else if (e.code === "Digit2") npcSel = 1;
+  else if (e.code === "Digit3") npcSel = 2;
+  else return;
+  npcSel = Math.max(0, Math.min(npcSel, npcObjs.length - 1));
+  updateNpcEditHud();
+});
+canvas.addEventListener("pointerdown", (e) => {
+  if (!npcEditMode) return;
+  const ndc = new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  raycaster.far = 1000;
+  const hit = raycaster.intersectObjects(colliderMeshes, true)[0];
+  const n = npcObjs[npcSel];
+  if (!hit || !n) return;
+  n.pos.x = hit.point.x;
+  n.pos.z = hit.point.z;
+  const gy = groundHeight(hit.point.x, hit.point.z, hit.point.y + 5);
+  n.root.position.set(hit.point.x, gy != null ? gy : hit.point.y, hit.point.z);
+  updateNpcEditHud();
+});
+
 // --- Snap a point to the ground via downward raycast -----------------------
 function groundHeight(x, z, fromY) {
   raycaster.set(new THREE.Vector3(x, fromY, z), DOWN);
   raycaster.far = fromY + 50;
   const hits = raycaster.intersectObjects(colliderMeshes, true);
   return hits.length ? hits[0].point.y : null;
+}
+
+// Median of a few ground rays around the feet. Rejects single-frame spikes and
+// small holes in the coarse Marble collider that make a single ray pop or miss.
+function groundHeightRobust(x, z, fromY, r = BODY_RADIUS * 0.6) {
+  const offs = [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r]];
+  const ys = [];
+  for (const [ox, oz] of offs) {
+    const h = groundHeight(x + ox, z + oz, fromY);
+    if (h !== null) ys.push(h);
+  }
+  if (!ys.length) return null;
+  ys.sort((a, b) => a - b);
+  return ys[ys.length >> 1]; // median
 }
 
 // Move horizontally, blocking against walls. Each axis is checked separately
@@ -823,6 +752,71 @@ let heading = 0; // character yaw
 let camDist = CAMERA_DIST; // eased camera distance (for wall collision)
 let camSnapped = false;    // snap the camera into place on the first frame
 let velY = 0;              // vertical velocity, for smooth gravity falls
+const vel = new THREE.Vector2(0, 0); // eased planar velocity (x = world X, y = world Z)
+const MOVE_ACCEL = 12;               // higher = snappier start/stop
+
+// --- Touch controls (Task 4): on-screen joystick + drag-to-turn, additive.
+// Writes the same `touch` / `heading` state the keyboard uses. Only created on
+// coarse-pointer devices, so desktop is visually and behaviourally unchanged.
+function setupTouchControls() {
+  const IS_TOUCH =
+    (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches) ||
+    "ontouchstart" in window;
+  if (!IS_TOUCH) return;
+  canvas.style.touchAction = "none";
+
+  // Joystick (bottom-left) → fwd/strafe with analog magnitude; full push = run.
+  const base = document.createElement("div");
+  base.style.cssText =
+    "position:fixed;left:22px;bottom:22px;width:120px;height:120px;border-radius:50%;" +
+    "background:rgba(255,255,255,0.12);border:2px solid rgba(255,255,255,0.35);z-index:8;touch-action:none;";
+  const knob = document.createElement("div");
+  knob.style.cssText =
+    "position:absolute;left:50%;top:50%;width:54px;height:54px;margin:-27px 0 0 -27px;" +
+    "border-radius:50%;background:rgba(255,255,255,0.5);";
+  base.appendChild(knob);
+  document.body.appendChild(base);
+
+  const R = 60;
+  let jid = null;
+  base.addEventListener("pointerdown", (e) => { jid = e.pointerId; base.setPointerCapture(jid); e.preventDefault(); });
+  base.addEventListener("pointermove", (e) => {
+    if (e.pointerId !== jid) return;
+    const rect = base.getBoundingClientRect();
+    const dx = e.clientX - (rect.left + rect.width / 2);
+    const dy = e.clientY - (rect.top + rect.height / 2);
+    const len = Math.hypot(dx, dy) || 1;
+    const cl = Math.min(len, R), nx = dx / len, ny = dy / len, mag = cl / R;
+    knob.style.transform = `translate(${nx * cl}px, ${ny * cl}px)`;
+    touch.fwd = -ny * mag;     // up = forward
+    touch.strafe = -nx * mag;  // left = +strafe (matches A)
+    touch.run = mag > 0.9;     // push to the edge to run
+  });
+  const reset = (e) => {
+    if (e.pointerId !== jid) return;
+    jid = null; touch.fwd = 0; touch.strafe = 0; touch.run = false;
+    knob.style.transform = "translate(0,0)";
+  };
+  base.addEventListener("pointerup", reset);
+  base.addEventListener("pointercancel", reset);
+
+  // Right half of the screen: drag to turn (heading). Skips the NPC UI.
+  let lid = null, lx = 0;
+  addEventListener("pointerdown", (e) => {
+    if (lid !== null || e.clientX < innerWidth / 2 || talking) return;
+    if (e.target && e.target.closest && e.target.closest("#reply-bar,#npc-toggle,#reply-suggest")) return;
+    lid = e.pointerId; lx = e.clientX;
+  });
+  addEventListener("pointermove", (e) => {
+    if (e.pointerId !== lid) return;
+    heading -= (e.clientX - lx) * 0.005; // drag right → turn right
+    lx = e.clientX;
+  });
+  const lend = (e) => { if (e.pointerId === lid) lid = null; };
+  addEventListener("pointerup", lend);
+  addEventListener("pointercancel", lend);
+}
+setupTouchControls();
 
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -831,8 +825,8 @@ function tick() {
   if (!talking && keys.ArrowLeft) heading += TURN_SPEED * dt;
   if (!talking && keys.ArrowRight) heading -= TURN_SPEED * dt;
 
-  // Move
-  const running = keys.ShiftLeft || keys.ShiftRight;
+  // Move — keyboard + (touch) joystick summed into the same fwd/strafe.
+  const running = keys.ShiftLeft || keys.ShiftRight || touch.run;
   const speed = running ? RUN_SPEED : WALK_SPEED;
   let fwd = 0, strafe = 0;
   if (!talking) {
@@ -840,21 +834,32 @@ function tick() {
     if (keys.ArrowDown || keys.KeyS) fwd -= 1;
     if (keys.KeyA) strafe += 1;
     if (keys.KeyD) strafe -= 1;
+    fwd += touch.fwd;
+    strafe += touch.strafe;
   }
 
-  const moving = fwd !== 0 || strafe !== 0;
-  if (moving) {
-    const sin = Math.sin(heading), cos = Math.cos(heading);
-    // forward follows the current heading; strafe is perpendicular.
-    // Heading is NOT recomputed from movement — only ← → turn changes it,
-    // so the character always faces away from the camera (back view).
-    const dx = (-sin * fwd - cos * strafe) * speed * dt;
-    const dz = (-cos * fwd + sin * strafe) * speed * dt;
-    moveWithCollision(dx, dz);
-    play(running ? "run" : "walk");
-  } else {
-    play("idle");
+  // Direction is normalized so diagonals aren't faster; magnitude is clamped to
+  // 1 (keeps full keyboard speed while preserving analog joystick tilt). Velocity
+  // eases toward the target for soft starts/stops, and the walk/run clip is gated
+  // on actual planar speed so it lingers while decelerating instead of cutting
+  // off on keyup. Heading stays ←/→-driven (back-to-camera design).
+  const sin = Math.sin(heading), cos = Math.cos(heading);
+  let tx = 0, tz = 0;
+  const m = Math.hypot(fwd, strafe);
+  if (m > 0.001) {
+    const nf = fwd / m, ns = strafe / m;
+    const mag = Math.min(1, m) * speed;
+    tx = (-sin * nf - cos * ns) * mag;
+    tz = (-cos * nf + sin * ns) * mag;
   }
+  const k = Math.min(1, dt * MOVE_ACCEL);
+  vel.x += (tx - vel.x) * k;
+  vel.y += (tz - vel.y) * k;
+  moveWithCollision(vel.x * dt, vel.y * dt);
+
+  const planarSpeed = vel.length();
+  if (planarSpeed > 0.05) play(running ? "run" : "walk");
+  else play("idle");
 
   // Keep the player within the clean core of the world.
   character.position.x = THREE.MathUtils.clamp(character.position.x, BOUNDS.minX, BOUNDS.maxX);
@@ -869,15 +874,17 @@ function tick() {
   // Cast DOWN from just above the feet (feet + STEP_UP) so the snap can only
   // ever raise us by a small step, never onto a wall/awning/roof. Small steps
   // settle instantly; walking off a ledge falls smoothly under gravity.
-  const ground = groundHeight(character.position.x, character.position.z, character.position.y + STEP_UP);
+  const ground = groundHeightRobust(character.position.x, character.position.z, character.position.y + STEP_UP);
   if (ground === null) {
     // Off-map safety: nothing within reach below — recover onto whatever floor
     // exists by snapping from high above (rare; keeps us from falling forever).
     const recover = groundHeight(character.position.x, character.position.z, 50);
     if (recover !== null) { character.position.y = recover; velY = 0; }
   } else if (character.position.y <= ground + 0.02) {
-    // On the floor or a small step up: settle exactly onto it (no jitter).
-    character.position.y = ground;
+    // Settle onto the floor; ease UP-steps over a few frames so collider noise
+    // within STEP_UP no longer pops. Downward never needs damping.
+    const rise = ground - character.position.y;
+    character.position.y += rise > 0 ? rise * Math.min(1, dt * 14) : rise;
     velY = 0;
   } else {
     // Above the ground (stepped off a ledge): accelerate downward, then land.
@@ -924,7 +931,6 @@ function tick() {
   camera.lookAt(character.position.x, character.position.y + HEAD_H * 0.9, character.position.z);
 
   if (mixer) mixer.update(dt);
-  updateTouristProps(); // keep hat/backpack/shirt/shorts on the player's bones
   updateNpcs(dt); // NPC mixers, proximity, turn-to-face, speech bubbles
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
@@ -949,13 +955,27 @@ function hideLoading() {
   } catch (e) {
     console.error("Character failed to load:", e); // keep going anyway
   }
-  await Promise.all([loadSplat(), loadCollider()]); // optional, degrade gracefully
-  // Spawn at the capture point (0,0,0 = guaranteed open center of the piazza).
-  // Y is set above the floor; the first ground-snap drops the character onto it.
-  character.position.set(0, 5.0, 0);
-  // Face the open core of the piazza (−Z, toward the bounds centre) so the cast,
-  // which loadNpcs() lays out on an arc into that same open area, is in view on
-  // spawn — first contact then works without turning around first.
+  if (WORLD_MODE === "town") {
+    // Stylized Three.js piazza (smooth, light). Its meshes ARE the colliders.
+    const town = buildTown(CHAR_H);
+    scene.add(town.group);
+    townGroup = town.group;
+    colliderMeshes = town.colliders;
+    BOUNDS = town.bounds;
+    townStations = town.stations;
+    scene.background = new THREE.Color(town.sky);
+    scene.fog = new THREE.Fog(new THREE.Color(town.fog.color), town.fog.near, town.fog.far);
+    grid.visible = false;
+    fallbackGround.visible = false;
+    character.position.set(town.spawn.x, 5.0, town.spawn.z);
+  } else {
+    // Photoreal Gaussian-splat world (the original).
+    await Promise.all([loadSplat(), loadCollider()]); // optional, degrade gracefully
+    townStations = SPLAT_STATIONS; // use baked NPC spots if set, else the arc
+    character.position.set(0, 5.0, 0);
+  }
+  // Face −Z (the open side / piazza centre) so the cast is in view on spawn —
+  // first contact works without turning around first.
   heading = 0;
   window.__char = character; // debug handle
   // Ground/NPC raycasts run here BEFORE the first render, so the collider's
@@ -969,5 +989,81 @@ function hideLoading() {
   if (spawnGy !== null) character.position.y = spawnGy;
   await loadNpcs(); // additive: locals standing in the existing town
   hideLoading();
+
+  // World toggle: reload flipping ?world (splat ⟷ town) so you can compare live.
+  const wbtn = document.createElement("button");
+  wbtn.textContent = WORLD_MODE === "town" ? "🏛 Town — switch to Splat" : "📷 Splat — switch to Town";
+  wbtn.style.cssText =
+    "position:fixed;left:16px;top:16px;z-index:8;background:rgba(0,0,0,0.5);color:#fff;" +
+    "border:1px solid rgba(255,255,255,0.25);border-radius:8px;padding:6px 10px;" +
+    "font:12px system-ui,sans-serif;cursor:pointer;backdrop-filter:blur(6px);";
+  wbtn.addEventListener("click", () => {
+    const u = new URL(location.href);
+    u.searchParams.set("world", WORLD_MODE === "town" ? "splat" : "town");
+    location.href = u.toString();
+  });
+  document.body.appendChild(wbtn);
+
+  // Export the Three.js town as a .glb — for importing into Marble Studio as a
+  // layout scaffold. GLTFExporter is dynamically imported so it's only fetched
+  // when you actually export.
+  if (WORLD_MODE === "town" && townGroup) {
+    const ebtn = document.createElement("button");
+    ebtn.textContent = "⬇ Export .glb";
+    ebtn.style.cssText =
+      "position:fixed;left:16px;top:52px;z-index:8;background:rgba(0,0,0,0.5);color:#fff;" +
+      "border:1px solid rgba(255,255,255,0.25);border-radius:8px;padding:6px 10px;" +
+      "font:12px system-ui,sans-serif;cursor:pointer;backdrop-filter:blur(6px);";
+    ebtn.addEventListener("click", async () => {
+      ebtn.textContent = "exporting…";
+      try {
+        const { GLTFExporter } = await import("three/addons/exporters/GLTFExporter.js");
+        new GLTFExporter().parse(
+          townGroup,
+          (res) => {
+            const blob = new Blob([res], { type: "model/gltf-binary" });
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = "italy-piazza.glb";
+            a.click();
+            URL.revokeObjectURL(a.href);
+            ebtn.textContent = "⬇ Export .glb";
+          },
+          (err) => { console.error("GLB export failed", err); ebtn.textContent = "export failed"; },
+          { binary: true }
+        );
+      } catch (err) {
+        console.error("GLB export failed", err);
+        ebtn.textContent = "export failed";
+      }
+    });
+    document.body.appendChild(ebtn);
+  }
+
+  // Move-NPCs tool: toggle placement mode; 1/2/3 select, click ground to move.
+  if (npcObjs.length) {
+    const nbtn = document.createElement("button");
+    nbtn.textContent = "✥ Move NPCs";
+    nbtn.style.cssText =
+      "position:fixed;left:16px;top:88px;z-index:8;background:rgba(0,0,0,0.5);color:#fff;" +
+      "border:1px solid rgba(255,255,255,0.25);border-radius:8px;padding:6px 10px;" +
+      "font:12px system-ui,sans-serif;cursor:pointer;backdrop-filter:blur(6px);";
+    nbtn.addEventListener("click", () => {
+      npcEditMode = !npcEditMode;
+      nbtn.textContent = npcEditMode ? "✥ Move NPCs: ON" : "✥ Move NPCs";
+      nbtn.style.borderColor = npcEditMode ? "#9fe39f" : "rgba(255,255,255,0.25)";
+      if (npcEditMode && !npcEditHud) {
+        npcEditHud = document.createElement("div");
+        npcEditHud.style.cssText =
+          "position:fixed;left:16px;top:124px;z-index:9;background:rgba(0,0,0,.6);color:#9fe39f;" +
+          "font:12px ui-monospace,monospace;padding:6px 9px;border-radius:8px;white-space:pre;pointer-events:none;";
+        document.body.appendChild(npcEditHud);
+      }
+      if (npcEditHud) npcEditHud.style.display = npcEditMode ? "block" : "none";
+      if (npcEditMode) updateNpcEditHud();
+    });
+    document.body.appendChild(nbtn);
+  }
+
   tick();
 })();
