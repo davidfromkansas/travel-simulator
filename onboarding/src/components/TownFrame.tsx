@@ -6,6 +6,7 @@ interface Props {
   countryName: string;
   onChangeDestination: () => void;
   worldMode: WorldMode;
+  canToggleWorld: boolean;
   onToggleWorld: () => void;
 }
 
@@ -18,6 +19,7 @@ export default function TownFrame({
   countryName,
   onChangeDestination,
   worldMode,
+  canToggleWorld,
   onToggleWorld,
 }: Props) {
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -47,21 +49,23 @@ export default function TownFrame({
         <button className="town-back" onClick={onChangeDestination}>
           ← Change destination
         </button>
-        <button
-          className="town-toggle"
-          onClick={() => {
-            // The new scene reloads; show the loader until it's ready.
-            setLoaded(false);
-            onToggleWorld();
-          }}
-          title={
-            worldMode === "splat"
-              ? "Showing the real captured scene — switch to the low-poly model"
-              : "Showing the low-poly model — switch to the real captured scene"
-          }
-        >
-          {worldMode === "splat" ? "🧱 Show model" : "📷 Show real scene"}
-        </button>
+        {canToggleWorld && (
+          <button
+            className="town-toggle"
+            onClick={() => {
+              // The new scene reloads; show the loader until it's ready.
+              setLoaded(false);
+              onToggleWorld();
+            }}
+            title={
+              worldMode === "splat"
+                ? "Showing the real captured scene — switch to the low-poly model"
+                : "Showing the low-poly model — switch to the real captured scene"
+            }
+          >
+            {worldMode === "splat" ? "🧱 Show model" : "📷 Show real scene"}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -20,10 +20,19 @@ const TOWN_BASE = import.meta.env.VITE_TOWN_URL ?? "http://localhost:5174";
 // placeholder scene until their world build exists.
 const TOWN_BY_COUNTRY: Record<string, string> = {
   italy: TOWN_BASE,
+  japan: TOWN_BASE, // procedural Shibuya (no splat) — see world/src/shibuya.js
 };
+
+// Countries that have a captured Gaussian-splat scene (the "real scene"). Others
+// only have a procedural model world, so the splat/model toggle is hidden.
+const SPLAT_COUNTRIES = new Set(["italy", "japan"]);
 
 export function hasTown(country: string): boolean {
   return country.toLowerCase() in TOWN_BY_COUNTRY;
+}
+
+export function hasSplat(country: string): boolean {
+  return SPLAT_COUNTRIES.has(country.toLowerCase());
 }
 
 // Which world the town renders: the photoreal Gaussian splat (the actual

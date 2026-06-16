@@ -4,6 +4,7 @@ import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from "three-mesh-bvh";
 import { castForLanguage } from "./npcs.js";
 import { buildTown } from "./town.js";
+import { buildShibuya } from "./shibuya.js";
 import { asset } from "./assets.js";
 window.THREE = THREE; // debug handle
 
@@ -24,11 +25,35 @@ const EMBEDDED = window.self !== window.top;
 // Baked NPC positions for the splat world (set after placing them with the
 // "Move NPCs" tool). null → fall back to the generic arc layout. Order matches
 // the kit's roles (gelato vendor → trattoria host → barista).
-const SPLAT_STATIONS = [
-  [-4.09, -0.93], // Giulia (gelato) — arc spot
-  [1.22, 2.25],   // Marco (trattoria) — placed out of the fountain
-  [3.56, -2.23],  // Sofia (barista) — arc spot
-];
+// Per-country Gaussian-splat scene: the captured "real" world, its collider,
+// vertical seat offset, walkable bounds, and baked NPC spots (from the "Move
+// NPCs" tool; null → generic arc). Italy = the original draft1 capture; Japan =
+// japan_refined. A country absent here has no splat (procedural world only) —
+// COUNTRY_HAS_SPLAT is derived from this map.
+const SPLAT_BY_COUNTRY = {
+  italy: {
+    splat: "/worlds/draft1.spz",
+    collider: "/worlds/draft1.glb",
+    offsetY: -0.08, // seats the splat ground onto the collider (tuned)
+    bounds: { minX: -10, maxX: 8.5, minZ: -11.5, maxZ: 2.7 },
+    stations: [
+      [-4.09, -0.93], // Giulia (gelato)
+      [1.22, 2.25],   // Marco (trattoria)
+      [3.56, -2.23],  // Sofia (barista)
+    ],
+  },
+  japan: {
+    splat: "/worlds/japan_refined.spz",
+    collider: "/worlds/japan_refined.glb",
+    // The japan_refined capture is ~10× larger than Italy's (collider ~328×220×335
+    // units), which dwarfs the ~0.9-unit character — so shrink the whole scene to
+    // character scale. Tune this until a person reads as the right height.
+    scale: 0.35,
+    offsetY: -0.06,  // seats the splat ground onto the collider (tuned live)
+    bounds: { minX: -16, maxX: 16, minZ: -16, maxZ: 16 }, // generous; tune to the capture
+    stations: null,  // arc in front of spawn (scale-independent); bake via "Move NPCs" later
+  },
+};
 
 // Accelerate raycasts with a BVH. The movement loop fires ~8 rays/frame against
 // the collider mesh; without this they brute-force every triangle (stutter).
@@ -44,8 +69,6 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 // The character is a standard rigged glTF with Idle / Walk / Run clips.
 // ---------------------------------------------------------------------------
 const ASSETS = {
-  splat: asset("/worlds/draft1.spz"),
-  collider: asset("/worlds/draft1.glb"),
   character: asset("/models/casual.glb"),
 };
 
@@ -147,9 +170,10 @@ let townSplat = null;
 let splatOffsetY = -0.08; // draft1: seats the splat ground onto the collider
 async function loadSplat() {
   try {
-    const splat = new SplatMesh({ url: ASSETS.splat });
+    const splat = new SplatMesh({ url: asset(SPLAT_SRC.splat) });
     await splat.initialized;
     splat.rotation.x = SPLAT_ROTATION_X;
+    splat.scale.setScalar(SPLAT_SRC.scale ?? 1); // match the capture's scale to the character
     splat.position.y = splatOffsetY;
     scene.add(splat);
     townSplat = splat;
@@ -163,9 +187,10 @@ async function loadSplat() {
 // --- Load collider mesh (invisible, used for physics) ----------------------
 async function loadCollider() {
   try {
-    const gltf = await loader.loadAsync(ASSETS.collider);
+    const gltf = await loader.loadAsync(asset(SPLAT_SRC.collider));
     const root = gltf.scene;
     root.rotation.x = SPLAT_ROTATION_X; // match the splat orientation
+    root.scale.setScalar(SPLAT_SRC.scale ?? 1); // match the capture's scale to the character
     const meshes = [];
     root.traverse((o) => {
       if (o.isMesh) {
@@ -225,20 +250,24 @@ async function loadCharacter() {
 // Read language + level so the cast and the brain are calibrated to the player,
 // plus the player's identity/interests so NPCs can talk to them as a person.
 // Falls back to the country default + beginner if the world is opened directly.
-const COUNTRY_DEFAULT_LANGUAGE = { italy: "Italian" };
+const COUNTRY_DEFAULT_LANGUAGE = { italy: "Italian", japan: "Japanese" };
 const str = (v) => (typeof v === "string" ? v.trim() : "");
 const strArr = (v) => (Array.isArray(v) ? v.filter((s) => typeof s === "string" && s.trim()) : []);
 function readProfile() {
   const params = new URLSearchParams(location.search);
   const country = (params.get("country") || "italy").toLowerCase();
-  let language = COUNTRY_DEFAULT_LANGUAGE[country] || "Italian";
+  // Immersion: the destination country sets the language the locals speak. A
+  // known country wins over the profile's "learning" language so visiting Japan
+  // always gets Japanese NPCs; only an unknown country falls back to the profile.
+  const countryLang = COUNTRY_DEFAULT_LANGUAGE[country];
+  let language = countryLang || "Italian";
   let level = "beginner";
   let player = null; // the rest of the onboarding answers, for the NPC brain
   const raw = params.get("profile");
   if (raw) {
     try {
       const p = JSON.parse(raw);
-      if (p?.languages?.learning) language = p.languages.learning;
+      if (!countryLang && p?.languages?.learning) language = p.languages.learning;
       if (p?.languages?.level) level = p.languages.level;
       // Keep the whole person (name, where they're from, what they're into) so
       // NPCs can greet by name and lean into interests — not just language/level.
@@ -263,6 +292,14 @@ function readProfile() {
 }
 const PROFILE = readProfile();
 
+// Which procedural world each country renders, and which have a captured splat.
+// A country without a splat always uses its procedural world (no ?world toggle).
+const WORLD_BUILDERS = { italy: buildTown, japan: buildShibuya };
+const COUNTRY_HAS_SPLAT = SPLAT_BY_COUNTRY; // a country has a "real scene" iff a splat is configured
+const SPLAT_SRC = SPLAT_BY_COUNTRY[PROFILE.country] || SPLAT_BY_COUNTRY.italy;
+const buildWorld = WORLD_BUILDERS[PROFILE.country] || buildTown;
+const EFFECTIVE_MODE = COUNTRY_HAS_SPLAT[PROFILE.country] ? WORLD_MODE : "town";
+
 // --- Speech-bubble + HUD DOM (created in JS so index.html stays untouched) --
 const npcStyle = document.createElement("style");
 npcStyle.textContent = `
@@ -276,6 +313,13 @@ npcStyle.textContent = `
   }
   .bubble .en { display:block; margin-top:3px; font-size:11px; color:#b9c0cc; }
   .bubble .fix { display:block; margin-top:4px; font-size:11px; color:#ffd24a; }
+  .bubble .who { display:block; font-size:10px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.06em; opacity:.6; margin-bottom:3px; }
+  /* Docked layout during a conversation: NPC line pinned top, your line pinned
+     bottom, so the two never overlap when you're standing face-to-face. */
+  .bubble.dock { left:50%; transform:translateX(-50%); max-width:min(520px,92vw); }
+  .bubble.dock-top { top:30vh; }
+  .bubble.dock-bottom { bottom:190px; }
   #npc-hint {
     position: fixed; transform: translate(-50%, 0); margin-top: 6px;
     background: rgba(0,0,0,0.6); color:#fff; padding:4px 9px; border-radius:8px;
@@ -403,6 +447,15 @@ function place(el, x, y, z) {
   el.style.left = `${(_proj.x * 0.5 + 0.5) * window.innerWidth}px`;
   el.style.top = `${(-_proj.y * 0.5 + 0.5) * window.innerHeight}px`;
 }
+// Pin a bubble to a fixed screen zone (top = NPC, bottom = you) during a chat.
+function dockBubble(el, where) {
+  el.style.left = ""; el.style.top = ""; // drop any projected inline coords
+  el.style.display = "block";
+  el.classList.add("dock", where === "top" ? "dock-top" : "dock-bottom");
+}
+function undockBubble(el) {
+  el.classList.remove("dock", "dock-top", "dock-bottom");
+}
 
 function npcById(id) { return npcObjs.find((n) => n.id === id); }
 
@@ -413,12 +466,14 @@ function escapeHtml(s) {
 function renderNpcBubble(def, line) {
   const accent = def ? def.accent : "#8ad58a";
   npcBubble.style.borderColor = accent;
-  let html = escapeHtml(line.reply || "…");
+  let html = def ? `<span class="who" style="color:${accent}">${escapeHtml(def.name)}</span>` : "";
+  html += escapeHtml(line.reply || "…");
   if (showEnglish && line.reply_en) html += `<span class="en">${escapeHtml(line.reply_en)}</span>`;
   npcBubble.innerHTML = html;
 }
 function renderPlayerBubble(coach) {
-  let html = escapeHtml(coach.text || "");
+  let html = `<span class="who">You</span>`;
+  html += escapeHtml(coach.text || "");
   if (showEnglish && coach.your_en) html += `<span class="en">${escapeHtml(coach.your_en)}</span>`;
   if (coach.correction) html += `<span class="fix">✏️ ${escapeHtml(coach.correction)}</span>`;
   playerBubble.innerHTML = html;
@@ -568,13 +623,14 @@ function findIdleAction(mixer, clips) {
 async function loadNpcs() {
   // Derive the arc's facing from the world bounds (NOT a screenshot): point the
   // cast toward the centre of the clean walkable core so they stand in the open.
+  // Open the arc in the direction the player faces on spawn (heading 0 = −Z).
+  // Deriving it from the bounds centre degenerates when the spawn sits at the
+  // centre (symmetric bounds, e.g. the Japan splat) and flips the cast behind
+  // you; the spawn heading is the robust, scale-independent signal.
   const spawn = {
     x: character.position.x,
     z: character.position.z,
-    facing: Math.atan2(
-      (BOUNDS.minX + BOUNDS.maxX) / 2 - character.position.x,
-      -((BOUNDS.minZ + BOUNDS.maxZ) / 2 - character.position.z)
-    ),
+    facing: heading,
     // In town mode, stand the locals at their built venues (verified positions),
     // overriding the generic arc — exactly the per-town `stations` data §4.4 wants.
     stations: townStations || undefined,
@@ -671,12 +727,21 @@ function updateNpcs(dt) {
     }
   }
 
-  // Project bubbles + hint from 3D to screen each frame.
+  // Bubbles each frame. While you're engaged (typing a reply, or you've already
+  // spoken) the two lines DOCK to fixed zones — NPC at the top, you at the bottom
+  // — so they never overlap face-to-face. The ambient first greeting still floats
+  // over the NPC's head.
+  const conversing = talking || playerBubble.style.display !== "none";
   if (activeNpcId) {
     const n = npcById(activeNpcId);
     if (n) {
       if (npcBubble.style.display !== "none") {
-        place(npcBubble, n.pos.x, n.root.position.y + BUBBLE_H, n.pos.z);
+        if (conversing) {
+          dockBubble(npcBubble, "top");
+        } else {
+          undockBubble(npcBubble);
+          place(npcBubble, n.pos.x, n.root.position.y + BUBBLE_H, n.pos.z);
+        }
       }
       if (!talking) {
         place(hintEl, n.pos.x, n.root.position.y + BUBBLE_H * 0.5, n.pos.z);
@@ -687,7 +752,7 @@ function updateNpcs(dt) {
     }
   }
   if (playerBubble.style.display !== "none") {
-    place(playerBubble, character.position.x, character.position.y + BUBBLE_H, character.position.z);
+    dockBubble(playerBubble, "bottom"); // a player bubble only exists mid-conversation
   }
 }
 
@@ -707,24 +772,21 @@ addEventListener("keyup", (e) => {
   keys[e.code] = false;
 });
 
-// Splat vertical-alignment nudge (splat mode): [ lowers, ] raises the splat so
-// its visual ground sits exactly on the collider. The readout shows the value
-// to bake into `splatOffsetY` above.
-let splatNudgeHud = null;
+// Splat vertical-alignment nudge (splat mode): lower/raise the splat so its
+// visual ground sits exactly on the collider. Driven by the [ / ] keys AND the
+// on-screen Floor ▲/▼ buttons built in splat mode below. The readout shows the
+// value to bake into the country's `offsetY` in SPLAT_BY_COUNTRY above.
+let floorReadout = null;
+function nudgeFloor(delta) {
+  if (!townSplat) return;
+  splatOffsetY = +(splatOffsetY + delta).toFixed(3);
+  townSplat.position.y = splatOffsetY;
+  if (floorReadout) floorReadout.textContent = `floor: ${splatOffsetY.toFixed(2)}`;
+}
 addEventListener("keydown", (e) => {
   if (e.target && e.target.tagName === "INPUT") return;
-  if ((e.code === "BracketLeft" || e.code === "BracketRight") && townSplat) {
-    splatOffsetY += e.code === "BracketRight" ? 0.02 : -0.02;
-    townSplat.position.y = splatOffsetY;
-    if (!splatNudgeHud) {
-      splatNudgeHud = document.createElement("div");
-      splatNudgeHud.style.cssText =
-        "position:fixed;left:16px;top:88px;z-index:9;background:rgba(0,0,0,.6);color:#9fe39f;" +
-        "font:12px ui-monospace,monospace;padding:6px 9px;border-radius:8px;pointer-events:none;";
-      document.body.appendChild(splatNudgeHud);
-    }
-    splatNudgeHud.textContent = `splat Y offset: ${splatOffsetY.toFixed(2)}   ( [ down · ] up )`;
-  }
+  if (e.code === "BracketLeft") nudgeFloor(-0.02);
+  else if (e.code === "BracketRight") nudgeFloor(0.02);
 });
 
 // --- NPC placement tool: toggle with the "Move NPCs" button, press 1/2/3 to
@@ -1019,9 +1081,10 @@ function hideLoading() {
   } catch (e) {
     console.error("Character failed to load:", e); // keep going anyway
   }
-  if (WORLD_MODE === "town") {
-    // Stylized Three.js piazza (smooth, light). Its meshes ARE the colliders.
-    const town = buildTown(CHAR_H);
+  if (EFFECTIVE_MODE === "town") {
+    // Stylized Three.js world for this country (smooth, light). Its meshes ARE
+    // the colliders. Italy → piazza, Japan → Shibuya (see WORLD_BUILDERS).
+    const town = buildWorld(CHAR_H);
     scene.add(town.group);
     townGroup = town.group;
     colliderMeshes = town.colliders;
@@ -1033,9 +1096,12 @@ function hideLoading() {
     fallbackGround.visible = false;
     character.position.set(town.spawn.x, 5.0, town.spawn.z);
   } else {
-    // Photoreal Gaussian-splat world (the original).
+    // Photoreal Gaussian-splat world for this country (Italy = draft1, Japan =
+    // japan_refined). Bounds + ground offset come from the per-country config.
+    BOUNDS = SPLAT_SRC.bounds;
+    splatOffsetY = SPLAT_SRC.offsetY ?? splatOffsetY; // set before loadSplat seats the splat
     await Promise.all([loadSplat(), loadCollider()]); // optional, degrade gracefully
-    townStations = SPLAT_STATIONS; // use baked NPC spots if set, else the arc
+    townStations = SPLAT_SRC.stations; // baked NPC spots if set, else the arc fallback
     character.position.set(0, 5.0, 0);
   }
   // Face −Z (the open side / piazza centre) so the cast is in view on spawn —
@@ -1054,11 +1120,12 @@ function hideLoading() {
   await loadNpcs(); // additive: locals standing in the existing town
   hideLoading();
 
-  // World toggle (standalone only): reload flipping ?world (splat ⟷ town) so you
-  // can compare live. When embedded, the onboarding app provides this toggle.
-  if (!EMBEDDED) {
+  // World toggle (standalone only, and only where a splat exists): reload
+  // flipping ?world (splat ⟷ town) so you can compare live. When embedded, the
+  // onboarding app provides this toggle.
+  if (!EMBEDDED && COUNTRY_HAS_SPLAT[PROFILE.country]) {
     const wbtn = document.createElement("button");
-    wbtn.textContent = WORLD_MODE === "town" ? "🏛 Town — switch to Splat" : "📷 Splat — switch to Town";
+    wbtn.textContent = EFFECTIVE_MODE === "town" ? "🏛 Town — switch to Splat" : "📷 Splat — switch to Town";
     wbtn.style.cssText =
       "position:fixed;left:16px;top:16px;z-index:8;background:rgba(0,0,0,0.5);color:#fff;" +
       "border:1px solid rgba(255,255,255,0.25);border-radius:8px;padding:6px 10px;" +
@@ -1071,10 +1138,39 @@ function hideLoading() {
     document.body.appendChild(wbtn);
   }
 
+  // Floor height controls (splat mode): nudge the splat's visual ground up/down
+  // to seat it on the collider you walk on. Same effect as the [ / ] keys, but
+  // on-screen so it's discoverable. The readout is the value to bake into the
+  // country's `offsetY`.
+  if (EFFECTIVE_MODE === "splat" && townSplat) {
+    const panel = document.createElement("div");
+    panel.style.cssText =
+      "position:fixed;left:16px;top:52px;z-index:8;display:flex;align-items:center;gap:6px;" +
+      "background:rgba(0,0,0,0.5);color:#fff;border:1px solid rgba(255,255,255,0.25);" +
+      "border-radius:8px;padding:5px 8px;font:12px system-ui,sans-serif;backdrop-filter:blur(6px);";
+    const mkBtn = (label, delta) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.title = delta > 0 ? "Raise floor ( ] )" : "Lower floor ( [ )";
+      b.style.cssText =
+        "background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.25);" +
+        "border-radius:6px;width:26px;height:24px;cursor:pointer;font:14px system-ui;line-height:1;";
+      b.addEventListener("click", () => nudgeFloor(delta));
+      return b;
+    };
+    const label = document.createElement("span");
+    label.textContent = "Floor";
+    floorReadout = document.createElement("span");
+    floorReadout.style.cssText = "min-width:74px;font:12px ui-monospace,monospace;";
+    floorReadout.textContent = `floor: ${splatOffsetY.toFixed(2)}`;
+    panel.append(label, mkBtn("▲", 0.02), mkBtn("▼", -0.02), floorReadout);
+    document.body.appendChild(panel);
+  }
+
   // Export the Three.js town as a .glb — for importing into Marble Studio as a
   // layout scaffold. GLTFExporter is dynamically imported so it's only fetched
   // when you actually export.
-  if (WORLD_MODE === "town" && townGroup) {
+  if (EFFECTIVE_MODE === "town" && townGroup) {
     const ebtn = document.createElement("button");
     ebtn.textContent = "⬇ Export .glb";
     ebtn.style.cssText =

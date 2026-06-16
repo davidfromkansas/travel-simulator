@@ -31,6 +31,8 @@ const PERSON_LOOKS = [
   { tint: "#3f7d5a", scale: 0.97 }, // green
   { tint: "#9c3b34", scale: 1.08 }, // deep red, a touch taller
   { tint: "#2f5d8a", scale: 0.90 }, // blue, a touch shorter
+  { tint: "#8a6d3b", scale: 1.02 }, // ochre
+  { tint: "#6b3f7a", scale: 0.94 }, // plum
 ];
 
 // Place kits, keyed by language (matching profile.languages.learning). Each kit
@@ -66,6 +68,53 @@ export const PLACE_KITS = {
           "A brisk, friendly espresso-bar barista. Quick and cheerful.",
         greeting: "Ciao! Un caffè al volo?",
         greeting_en: "Hi! A quick coffee?",
+      },
+    ],
+  },
+
+  Japanese: {
+    language: "Japanese",
+    accent: "#ff6b9d", // neon pink — bubble accent
+    roles: [
+      {
+        role: "Izakaya master",
+        name: "Haruto",
+        persona:
+          "A cheerful izakaya master behind a smoky yakitori grill. Warm, a little gruff, proud of his skewers.",
+        greeting: "いらっしゃい！焼き鳥どう？",
+        greeting_en: "Welcome! How about some yakitori?",
+      },
+      {
+        role: "Ramen shop owner",
+        name: "Yui",
+        persona:
+          "A friendly ramen shop owner who loves recommending her tonkotsu broth. Energetic and kind.",
+        greeting: "こんばんは！ラーメン食べていく？",
+        greeting_en: "Good evening! Staying for some ramen?",
+      },
+      {
+        role: "Konbini clerk",
+        name: "Ren",
+        persona:
+          "A polite, slightly sleepy late-shift convenience-store clerk. Helpful and unfailingly courteous.",
+        greeting: "いらっしゃいませ！何かお探しですか？",
+        greeting_en: "Welcome! Are you looking for something?",
+      },
+      {
+        role: "Takoyaki vendor",
+        name: "Aoi",
+        persona:
+          "A bubbly street takoyaki vendor flipping batter at her stall. Playful and chatty.",
+        greeting: "たこ焼きいかが？できたてだよ！",
+        greeting_en: "Fancy some takoyaki? Fresh off the grill!",
+      },
+      {
+        role: "Local student",
+        name: "Mei",
+        persona:
+          "A friendly local university student heading to the crossing. Curious about travellers, happy to give directions.",
+        greeting: "あ、こんばんは！スクランブル交差点、見に行く？",
+        greeting_en: "Oh, hi! Heading to the scramble crossing?",
       },
     ],
   },
